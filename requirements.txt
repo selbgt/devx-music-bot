@@ -1,0 +1,12 @@
+# ============================================================
+#  DEV X CORE — Python requirements (verified working combo)
+#  py-tgcalls == 2.2.5   +   pyrogram == 2.0.106
+#  (py-tgcalls >= 2.2.6 breaks on pyrogram 2.0.106 → NoneType crash)
+# ============================================================
+
+pyrogram==2.0.106
+py-tgcalls[pyrogram]==2.2.5
+yt-dlp==2025.8.18
+aiohttp==3.11.9
+Pillow==11.1.0
+gTTS==2.5.4
