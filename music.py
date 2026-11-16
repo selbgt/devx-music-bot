@@ -1,38 +1,8 @@
+#!/usr/bin/env python3
 # ============================================================
-#  𝐃𝐄𝐕 𝐗 𝐂𝐎𝐑𝐄 — ALL-IN-ONE (Single File)  [FIXED]
-#
-#  This ONE file does everything:
-#   1. Token Bot starts immediately (login helper)
-#   2. Send /login to that bot -> number + OTP in Telegram chat
-#   3. As soon as you log in, the Music Userbot starts AUTOMATICALLY
-#
-#  How to run:
-#   python music.py
-#  Then send /login to your bot on Telegram.
-#
-#  After the first login, the session string is saved
-#  (session_string.txt) -> next time the bot plays music directly.
-#
-#  DEV X CORE v4 — music userbot + tools + new menu system.
-#  Saved files:  .files   .run1   .del 1-10   .delall
-#  Banner:       .set   (reply video/photo -> GIF, attached to menu)
-#  Play:         .play / .nplay — multi-source search + link support
-#
-#  ============ [FIX 2026-08-18] ============
-#  Root cause of "'NoneType' object has no attribute 'play'":
-#     py-tgcalls >= 2.2.6 imports `GroupcallForbidden` from
-#     pyrogram.errors, but pyrogram on PyPI stops at 2.0.106
-#     (no such symbol) -> PyTgCalls() constructor raises inside
-#     start_music() -> `vc` stays None -> every .play crashes.
-#
-#  Fix (verified on Python 3.14):
-#     pip install "pyrogram==2.0.106" "py-tgcalls[pyrogram]==2.2.5"
-#  Or use the included requirements.txt.
-#
-#  The script now also detects the bad combo at startup and in
-#  .diag //status, and shows a friendly message instead of the
-#  NoneType error if the voice engine is not running.
-#  =============================================
+#  🎵 DEV X CORE — SIMPLE MUSIC BOT (Song Play Only)
+#  Removed: files vault, .run/.vrun, banner, rjoin, .save/.ytdl
+#  Kept: .play / .nplay + pause/resume/skip/stop + queue + effects
 # ============================================================
 
 import asyncio
@@ -54,7 +24,6 @@ from datetime import datetime
 import json
 
 # ==================== EVENT LOOP (critical) ====================
-# MUST run BEFORE importing pyrogram/pytgcalls (Python 3.12+/3.14 fix).
 LOOP = asyncio.new_event_loop()
 asyncio.set_event_loop(LOOP)
 
@@ -69,41 +38,17 @@ from pyrogram.types import (
 )
 from pyrogram.enums import ChatType, ChatMemberStatus, MessageServiceType
 
-# pyrogram 2.0.106 me voice chat bhi VIDEO_CHAT_* service messages se aati hai
-_CHAT_STARTED = {
-    getattr(MessageServiceType, n) for n in ("VIDEO_CHAT_STARTED", "VOICE_CHAT_STARTED")
-    if getattr(MessageServiceType, n, None) is not None
-}
-_CHAT_ENDED = {
-    getattr(MessageServiceType, n) for n in ("VIDEO_CHAT_ENDED", "VOICE_CHAT_ENDED")
-    if getattr(MessageServiceType, n, None) is not None
-}
 from pyrogram.storage.memory_storage import MemoryStorage
 from pyrogram.errors import (
-    PhoneCodeInvalid,
-    PhoneCodeExpired,
-    SessionPasswordNeeded,
-    FloodWait,
-    PhoneNumberInvalid,
-    PasswordHashInvalid,
-    PhoneNumberBanned,
-    PhoneNumberUnoccupied,
+    PhoneCodeInvalid, PhoneCodeExpired, SessionPasswordNeeded, FloodWait,
+    PhoneNumberInvalid, PasswordHashInvalid, PhoneNumberBanned, PhoneNumberUnoccupied,
 )
 
 from pytgcalls import PyTgCalls, idle
-from pytgcalls.types.stream import (
-    MediaStream,
-    AudioQuality,
-    VideoQuality,
-    StreamEnded,
-)
+from pytgcalls.types.stream import MediaStream, AudioQuality, VideoQuality, StreamEnded
 from pytgcalls.exceptions import NoActiveGroupCall
 
-# [FIX] ---------- VERSION COMPAT CHECK ----------
-# pyrogram on PyPI stops at 2.0.106. py-tgcalls >= 2.2.6 imports
-# GroupcallForbidden (only exists in newer clients) -> PyTgCalls()
-# crashes -> vc=None -> "'NoneType' object has no attribute 'play'".
-# Verified working combo: py-tgcalls==2.2.5 + pyrogram==2.0.106.
+# ==================== VERSION COMPAT CHECK ====================
 def _ver_tuple(v):
     try:
         return tuple(int(x) for x in re.findall(r"\d+", v)[:3])
@@ -111,7 +56,6 @@ def _ver_tuple(v):
         return (0, 0, 0)
 
 def check_engine_compat():
-    """Return (ok, problem_text) for the py-tgcalls + pyrogram combo."""
     try:
         import pyrogram as _pg
         pgv = _ver_tuple(getattr(_pg, "__version__", "0"))
@@ -126,28 +70,22 @@ def check_engine_compat():
         return False, (
             "py-tgcalls {} is NOT compatible with pyrogram {} "
             "(GroupcallForbidden missing).\n"
-            "Fix: pip install \"pyrogram==2.0.106\" "
-            "\"py-tgcalls[pyrogram]==2.2.5\""
+            "Fix: pip install \"pyrogram==2.0.106\" \"py-tgcalls[pyrogram]==2.2.5\""
         ).format(".".join(map(str, ptv)), ".".join(map(str, pgv)))
     return True, ""
-# ------------------------------------------------
 
 # ==================== CONFIG ====================
 API_ID = int(os.getenv("API_ID", "31633970"))
 API_HASH = os.getenv("API_HASH", "702925952d6f164b1cca78e9fa9c5488")
-BOT_TOKEN = os.getenv("BOT_TOKEN", "7964165741:AAFs5mv-EhceprLe5O93iMmY_NINeYAoO4o")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 OWNER_ID = int(os.getenv("OWNER_ID", "5206554804"))
 
-# Spotify (optional) — FREE keys yahan se: https://developer.spotify.com/dashboard
-# Server pe:  export SPOTIFY_CLIENT_ID=...  SPOTIFY_CLIENT_SECRET=...  phir restart.
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID", "").strip()
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET", "").strip()
 
-PREFIX = "."  # command prefix (dot)  ->  .play .help .menu .pause ...
-DEFAULT_VOLUME = 100  # default CLEAN sound (bina extra volume) — .boost/.volume se badhao
-BOOST_ON = False  # ultra boost is OFF by default (only when .boost on)
-AUTO_UNMUTE = True   # ✅ ON: har 5s check karo ki bot mute to nahi diya — unmute karo.
-# (volume call spam band hai — sirf jab user change kare; unmute bina restart ke chalta hai)
+PREFIX = "."
+DEFAULT_VOLUME = 100
+AUTO_UNMUTE = True
 ENFORCE_INTERVAL = 5
 
 BOT_NAME = "DEV X CORE"
@@ -159,16 +97,13 @@ SESSION_FILE = "session_string.txt"
 DB_PATH = "devx_music.db"
 LOGS_DIR = "logs"
 TEMP_DIR = "temp"
-BANNER_DIR = "banner"
 
-# ==================== SESSION STRING ====================
 SESSION_STRING = os.getenv("SESSION_STRING", "").strip()
 if not SESSION_STRING and os.path.exists(SESSION_FILE):
     with open(SESSION_FILE, "r") as _f:
         SESSION_STRING = _f.read().strip()
 
-# ==================== DIRS + LOGGING ====================
-for _d in (LOGS_DIR, TEMP_DIR, BANNER_DIR):
+for _d in (LOGS_DIR, TEMP_DIR):
     os.makedirs(_d, exist_ok=True)
 
 logging.basicConfig(
@@ -181,7 +116,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("DEVX_MUSIC")
 
-# ==================== DATABASE ====================
+# ==================== DATABASE (simplified: users + stats only) ====================
 class Database:
     def __init__(self, path=DB_PATH):
         self.conn = sqlite3.connect(path, check_same_thread=False)
@@ -192,8 +127,7 @@ class Database:
         self.c.execute(
             """CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY, username TEXT, first_name TEXT,
-                last_name TEXT, joined_at TEXT, is_active INTEGER DEFAULT 1,
-                is_admin INTEGER DEFAULT 0)"""
+                last_name TEXT, joined_at TEXT, is_active INTEGER DEFAULT 1)"""
         )
         self.c.execute(
             """CREATE TABLE IF NOT EXISTS stats (
@@ -202,29 +136,6 @@ class Database:
         self.c.execute(
             """CREATE TABLE IF NOT EXISTS config (
                 key TEXT PRIMARY KEY, value TEXT)"""
-        )
-        self.c.execute(
-            """CREATE TABLE IF NOT EXISTS files (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                path TEXT UNIQUE,
-                title TEXT,
-                source TEXT,
-                size INTEGER DEFAULT 0,
-                chat_id INTEGER DEFAULT 0,
-                created_at TEXT)"""
-        )
-        self.c.execute(
-            """CREATE TABLE IF NOT EXISTS notes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                owner INTEGER,
-                title TEXT,
-                body TEXT,
-                created_at TEXT)"""
-        )
-        self.c.execute(
-            """CREATE TABLE IF NOT EXISTS playlists (
-                name TEXT, chat_id INTEGER, songs TEXT, created_at TEXT,
-                PRIMARY KEY (name, chat_id))"""
         )
         self.conn.commit()
         logger.info("Database ready")
@@ -235,7 +146,6 @@ class Database:
             "INSERT OR IGNORE INTO users (id, username, first_name, last_name, joined_at) VALUES (?,?,?,?,?)",
             (uid, username or "", first_name or "", last_name or "", now),
         )
-        # [FIX] naya user aaya to stats bhi badhao (ab .stats me real count dikhta hai)
         if self.c.rowcount > 0:
             self.c.execute(
                 "INSERT INTO stats (key, value) VALUES ('total_users', 1) "
@@ -276,113 +186,45 @@ class Database:
         r = self.c.execute("SELECT value FROM config WHERE key=?", (key,)).fetchone()
         return r[0] if r else default
 
-    def add_file(self, path, title="", source="", chat_id=0):
-        if not path:
-            return
-        size = os.path.getsize(path) if os.path.exists(path) else 0
-        now = datetime.now().isoformat()
-        self.c.execute(
-            "INSERT OR REPLACE INTO files (path, title, source, size, chat_id, created_at) "
-            "VALUES (?,?,?,?,?,?)",
-            (path, title or os.path.basename(path), source or "", size, chat_id or 0, now),
-        )
-        self.conn.commit()
-
-    def get_files(self):
-        """Return saved files that still exist on disk (prunes missing rows)."""
-        rows = self.c.execute(
-            "SELECT id, path, title, source, size, chat_id, created_at "
-            "FROM files ORDER BY id"
-        ).fetchall()
-        alive = []
-        for r in rows:
-            if os.path.exists(r[1]):
-                # refresh size if it changed
-                try:
-                    real = os.path.getsize(r[1])
-                    if real != r[4]:
-                        self.c.execute("UPDATE files SET size=? WHERE id=?", (real, r[0]))
-                        r = (r[0], r[1], r[2], r[3], real, r[5], r[6])
-                except Exception:
-                    pass
-                alive.append(r)
-            else:
-                self.c.execute("DELETE FROM files WHERE id=?", (r[0],))
-        self.conn.commit()
-        return alive
-
-    def add_note(self, owner, title, body):
-        now = datetime.now().isoformat()
-        self.c.execute(
-            "INSERT INTO notes (owner, title, body, created_at) VALUES (?,?,?,?)",
-            (owner, title or "note", body or "", now),
-        )
-        self.conn.commit()
-        return self.c.lastrowid
-
-    def get_notes(self, owner, limit=30):
-        return self.c.execute(
-            "SELECT id, title, body, created_at FROM notes WHERE owner=? ORDER BY id DESC LIMIT ?",
-            (owner, limit),
-        ).fetchall()
-
-    def delete_note(self, owner, note_id):
-        self.c.execute("DELETE FROM notes WHERE owner=? AND id=?", (owner, note_id))
-        self.conn.commit()
-        return self.c.rowcount > 0
-
-    def delete_file_by_path(self, path):
-        try:
-            if path and os.path.exists(path):
-                os.remove(path)
-        except Exception:
-            pass
-        self.c.execute("DELETE FROM files WHERE path=?", (path,))
-        self.conn.commit()
-
     def close(self):
         self.conn.close()
 
 db = Database()
 
-# ==================== QUEUE / STATE ====================
+# ==================== QUEUE / STATE (in-memory only, no files) ====================
 class MusicQueue:
     def __init__(self):
         self.songs = deque()
         self.current = None
         self.loop = False
         self.repeat = False
-        # 🎚️ SAB SOUND EFFECTS 0-100 LEVEL CONTROL (numeric scale)
-        self.boost_level = 0    # 🚀 ultra booster level 0-100
-        self.eco_level = 0      # 🎤 echo / reverb level 0-100
-        self.gain_level = 0     # 📢 gain / loudspeaker mode level 0-100
-        self.loud_level = 0     # 🔊 loudspeaker (current song) level 0-100
-        self.treble = 0         # 🎼 treble boost level 0-100
+        self.boost_level = 0
+        self.eco_level = 0
+        self.gain_level = 0
+        self.loud_level = 0
+        self.treble = 0
         self.volume = DEFAULT_VOLUME
-        self.silent_loop = False  # 🔁 saved-file loop me repeat pe spam nahi
-        self.speed = 1.0        # ⚡ playback speed (0.5 - 2.5)
-        self.nightcore = False  # ⚡ nightcore mode (pitch + tempo)
-        self.bass = 0           # 🔊 bass boost level (0 - 20)
+        self.silent_loop = False
+        self.speed = 1.0
+        self.nightcore = False
+        self.bass = 0
 
 queues = {}
 active_calls = set()
 awaiting = {}
 search_cache = {}
 search_seq = [0]
-last_search = {}  # (chat_id, user_id) -> {"sid": int, "natural": bool, "ts": float}
-current_files = {}  # chat_id -> local file path currently being played
-replay_lock = set()  # chat_ids currently restarting a silent loop
-err_notified = set()  # already sent one loop-error for this session
-_last_vol_applied = {}  # chat_id -> last volume change_volume_call se apply hua (spam rokta hai)
-_muted_state = {}       # chat_id -> True = panel se mute kiya (respect karo, auto-unmute nahi)
-END_GUARD = {}          # chat_id -> {"count": int, "ts": float} — unknown-duration end guard
-_vol_auto = {}          # chat_id -> True = abhi tak user ne volume set nahi kiya → har play pe AUTO HIGH
-AUTO_MAX_VOLUME = 200   # 🔊 automatic highest volume (Telegram max 200; .volume 5000 tak manual)
+last_search = {}
+current_files = {}
+replay_lock = set()
+err_notified = set()
+_last_vol_applied = {}
+_muted_state = {}
+END_GUARD = {}
+_vol_auto = {}
+AUTO_MAX_VOLUME = 200
 
-# ==================== LIVE EFFECT RE-APPLY (bina restart) ====================
-# Chalte hue gaane pe .boost/.eco/.gain/.mix/.loud/.repeat dabane pe gaana
-# RESTART nahi hota — ffmpeg -ss seek se WAHI position pe resume hota hai.
-PLAY_TIMERS = {}  # chat_id -> {"start": float, "paused_elapsed": float, "paused": bool}
+PLAY_TIMERS = {}
 
 def _reset_timer(chat_id, seek=0):
     PLAY_TIMERS[chat_id] = {
@@ -404,114 +246,12 @@ def _resume_timer(chat_id):
         t["paused"] = False
 
 def get_elapsed(chat_id):
-    """Gaana kitne second se chal raha hai (paused ho to wahi rukta hai)."""
     t = PLAY_TIMERS.get(chat_id)
     if not t:
         return 0
     if t["paused"]:
         return t["paused_elapsed"]
     return t["paused_elapsed"] + (time.time() - t["start"])
-
-# ==================== .RJOIN — CALL LAGE TO KHUD JOIN ====================
-# .rjoin    -> is group me jab bhi voice chat start ho, userbot khud join karega
-# .rjoin 1,2,3 / all -> join + ye saved files repeat pe silent play honge
-# .rjoin off -> band
-# (DB me saved — restart ke baad bhi yaad rehta hai)
-
-def get_rjoin_spec(chat_id):
-    """None = registered nahi | 'join' = sirf join | '1,2,3' = files spec"""
-    raw = (db.get_config(f"rjoin:{chat_id}") or "").strip()
-    return raw or None
-
-def set_rjoin_spec(chat_id, spec):
-    db.set_config(f"rjoin:{chat_id}", spec or "")
-
-async def _rjoin_play_files(chat_id, indices, silent=True):
-    """Auto-join ke baad saved files repeat/loop pe play karo (spam nahi)."""
-    rows = db.get_files()
-    songs = []
-    for i in indices:
-        if 0 <= i < len(rows):
-            _id, path, title, source, size, _chat, created = rows[i]
-            if path and os.path.exists(path):
-                name = title or os.path.basename(path)
-                songs.append({
-                    "title": name,
-                    "duration": 0,
-                    "uploader": "DEV X CORE",
-                    "local_path": path,
-                    "source": "local",
-                    "loudspeaker": True,
-                    "rjoin": True,
-                })
-    if not songs:
-        return False
-    q = get_queue(chat_id)
-    if len(songs) == 1:
-        # single file -> gapless repeat (-stream_loop -1)
-        q.repeat = True
-        q.loop = False
-        q.silent_loop = True
-        q.songs.clear()
-        q.current = songs[0]
-    else:
-        # multiple -> sequential loop (spam-free)
-        q.loop = True
-        q.repeat = False
-        q.silent_loop = True
-        q.songs.clear()
-        for s in songs[1:]:
-            q.songs.append(s)
-        q.current = songs[0]
-    active_calls.add(chat_id)
-    err_notified.discard(chat_id)
-    ok = await play_song(chat_id, q.current, announce=False, silent=silent)
-    if not ok:
-        q.loop = False
-        q.repeat = False
-        q.current = None
-        active_calls.discard(chat_id)
-    return ok
-
-async def rjoin_on_call_started(chat_id):
-    """Call start hone pe auto-join + files play. Returns 'joined'/'playing'/None."""
-    if not vc_ready():
-        return None
-    spec = get_rjoin_spec(chat_id)
-    if spec is None:
-        return None
-    # ✅ STABILITY: agar pehle se kuch play ho raha hai (manual .play/.run) to
-    # rjoin playback disturb NAHI karta — loop apna kaam karta rehta hai.
-    _q = get_queue(chat_id)
-    if _q.current is not None or chat_id in active_calls:
-        return None
-    # join with retry (call abhi abhi start hui hoti hai)
-    joined = False
-    # Telegram ko call fully ready hone ka time do (3s)
-    await asyncio.sleep(3)
-    for attempt in range(6):
-        try:
-            await vc.play(chat_id)
-            joined = True
-            break
-        except NoActiveGroupCall:
-            logger.warning("rjoin: NoActiveGroupCall (attempt %d) — retrying…", attempt + 1)
-            await asyncio.sleep(3)
-        except Exception as e:
-            logger.warning("rjoin join error (attempt %d): %s", attempt + 1, e)
-            await asyncio.sleep(3)
-    if not joined:
-        return None
-    active_calls.add(chat_id)
-    if spec == "join":
-        return "joined"
-    sync_saved_files()
-    rows = db.get_files()
-    indices = resolve_file_spec(spec, rows)
-    if not indices:
-        return "joined"
-    ok = await _rjoin_play_files(chat_id, indices)
-    return "playing" if ok else "joined"
 
 def get_queue(chat_id):
     if chat_id not in queues:
@@ -531,16 +271,13 @@ async def is_group_admin(client, chat_id, user_id):
     except Exception:
         return False
 
-# ==================== CORE ADMINS (sirf owner appoint karta hai) ====================
 def get_core_admins():
-    """Owner ke diye hue admins (DB me saved). Owner hamesha included."""
     raw = db.get_config("core_admins", "") or ""
     ids = {int(x) for x in raw.split(",") if x.strip().isdigit()}
     ids.add(OWNER_ID)
     return ids
 
 def is_core_admin(user_id):
-    """True only for OWNER + .admin se diye gaye admins."""
     try:
         return int(user_id) in get_core_admins()
     except Exception:
@@ -556,37 +293,22 @@ def del_core_admin(user_id):
     ids.discard(int(user_id))
     db.set_config("core_admins", ",".join(str(i) for i in sorted(ids)))
 
-def core_admins_text():
-    admins = sorted(get_core_admins())
-    lines = [f"👑 **{BRAND} — {stylish('Core Admins')}**", "━━━━━━━━━━━━━━━━━━━━━"]
-    for a in admins:
-        tag = " • owner" if a == OWNER_ID else ""
-        lines.append(f"• `{a}`{tag}")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append(f"👉 `.admin add <id>` / `.admin del <id>` — {stylish('owner only')}")
-    return "\n".join(lines)
-
 async def can_control(client, chat_id, user_id):
-    # Owner + core admins ko hamesha control hai
     if is_core_admin(user_id):
         return True
-    # 🚫 GLOBAL BAN — banned user bot use nahi kar sakta
     try:
+        from music import uid_gbanned
         if uid_gbanned(user_id):
             return False
     except Exception:
         pass
-    # per-chat hard lock (.lockmusic) — sirf owner/core admins
     if await chat_locked(chat_id):
         return False
-    mode = get_mode()
+    mode = db.get_config("mode", "public")
     if mode == "private":
-        # 🔐 PRIVATE: sirf owner + core admins
         return False
-    # 🌍 PUBLIC: group ke owner/admins
     return await is_group_admin(client, chat_id, user_id)
 
-# ==================== BOT MOOD (.public / .private) ====================
 def get_mode():
     return db.get_config("mode", "public")
 
@@ -594,42 +316,23 @@ def set_mode(mode):
     db.set_config("mode", mode)
 
 async def _deny_reply(message):
-    """Mode ke hisaab se sahi denial message."""
     try:
         if get_mode() == "private":
-            t = (
-                f"🔐 『{BRAND}』 — {stylish('PRIVATE MODE')}\n\n"
-                f"{stylish('Sirf OWNER aur .admin se add kiye gaye log hi bot chala sakte hain.')} 👑\n"
-                f"`.public` — {stylish('mode badalne ke liye (owner)')}"
-            )
+            t = f"🔐 『{BRAND}』 — Sirf OWNER aur core admins hi bot chala sakte hain. 👑\n`.public` — mode badalne ke liye (owner)"
         else:
-            t = (
-                f"🔒 『{BRAND}』 — {stylish('PUBLIC MODE')}\n\n"
-                f"{stylish('Sirf group ke owner/admins hi control kar sakte hain.')}\n"
-                f"`.private` — {stylish('sirf owner + core admins (owner cmd)')}"
-            )
+            t = f"🔒 『{BRAND}』 — Sirf group ke owner/admins hi control kar sakte hain.\n`.private` — sirf owner + core admins"
         await message.reply_text(t)
     except Exception:
         pass
 
 async def _deny_answer(cb):
-    """Callback ke liye denial answer."""
     try:
-        txt = ("🔐 Private mode — sirf owner/core admins 👑"
-               if get_mode() == "private" else
-               "🔒 Sirf group owner/admins (public mode)")
+        txt = "🔐 Private mode — sirf owner/core admins 👑" if get_mode() == "private" else "🔒 Sirf group owner/admins (public mode)"
         await cb.answer(txt, show_alert=True)
     except Exception:
         pass
 
-CONTROL_CALLBACKS = {
-    "cb_pause", "cb_resume", "cb_skip", "cb_stop", "cb_loop",
-    "cb_repeat", "cb_boost", "cb_volup", "cb_voldown", "cb_play", "cb_voice",
-    "cb_mute", "cb_vol200", "cb_vol_10", "cb_vol_50", "cb_vol_100", "cb_vol_150",
-}
-
 # ==================== HELPERS ====================
-# Stylish font map — sab output is font me convert hota hai
 FONT_MAP = {
     'A': '𝐀','B': '𝐁','C': '𝐂','D': '𝐃','E': '𝐄','F': '𝐅','G': '𝐆','H': '𝐇',
     'I': '𝐈','J': '𝐉','K': '𝐊','L': '𝐋','M': '𝐌','N': '𝐍','O': '𝐎','P': '𝐏',
@@ -642,24 +345,12 @@ FONT_MAP = {
 }
 
 def stylish(text):
-    """Convert text to the stylish font (letters mapped, symbols/emoji kept)."""
     return "".join(FONT_MAP.get(c, c) for c in text)
 
 RULE = "◈━━━━━━━━━━━━━━━━━━━━━━━━━━◈"
-RULE_THIN = "─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─"
 
 def core_card(title, body, footer=None):
-    """Premium framed card used across menus."""
-    lines = [
-        RULE,
-        f"   {BRAND}",
-        f"   ⌁  {stylish(title)}  ⌁",
-        RULE,
-        "",
-        body.rstrip(),
-        "",
-        RULE,
-    ]
+    lines = [RULE, f"   {BRAND}", f"   ⌁  {stylish(title)}  ⌁", RULE, "", body.rstrip(), "", RULE]
     if footer:
         lines.append(f"   {footer}")
         lines.append(RULE)
@@ -670,12 +361,9 @@ def fmt_uptime(seconds=None):
     d, rem = divmod(max(0, seconds), 86400)
     h, rem = divmod(rem, 3600)
     m, s = divmod(rem, 60)
-    if d:
-        return f"{d}d {h}h {m}m"
-    if h:
-        return f"{h}h {m}m {s}s"
-    if m:
-        return f"{m}m {s}s"
+    if d: return f"{d}d {h}h {m}m"
+    if h: return f"{h}h {m}m {s}s"
+    if m: return f"{m}m {s}s"
     return f"{s}s"
 
 def hub_home_text(extra=""):
@@ -688,9 +376,9 @@ def hub_home_text(extra=""):
         f"  🎧 {stylish('active vc')}  `{len(active_calls)}`\n"
         "\n"
         f"  〔 01 〕  🎵 {stylish('music deck')}\n"
-        f"  〔 02 〕  🎛️  {stylish('player + files')}\n"
-        f"  〔 03 〕  🛠️  {stylish('tools + notes')}\n"
-        f"  〔 04 〕  🎮 {stylish('fun + studio')}\n"
+        f"  〔 02 〕  🎛️  {stylish('player + queue')}\n"
+        f"  〔 03 〕  🛠️  {stylish('tools')}\n"
+        f"  〔 04 〕  🎮 {stylish('fun')}\n"
     )
     if extra:
         body += "\n" + extra
@@ -699,62 +387,31 @@ def hub_home_text(extra=""):
 def page_music_text():
     body = (
         f"{stylish('PLAY')}\n"
-        f"  `.play <song>`   🎵 {stylish('search karke play')}\n"
-        f"  `.nplay <song>`  🎧 {stylish('natural sound')}\n"
-        f"  `.voice`         🎙️ {stylish('replied note')}\n"
-        "\n"
-        f"{stylish('LOOP')}\n"
-        f"  `.run`           🔁 {stylish('replied media loop')}\n"
-        f"  `.run 1,2,3`     🔁 {stylish('saved files loop')}\n"
-        f"  `.vrun`          🎬 {stylish('video loop')}\n"
-        f"  `.rjoin`         🤖 {stylish('call pe auto-join')}\n"
-        "\n"
-        f"{stylish('CONTROL')}\n"
+        f"  `.play <song>`   🎵 search karke play\n"
+        f"  `.nplay <song>`  🎧 natural sound\n"
+        f"\n{stylish('CONTROL')}\n"
         f"  `.pause` `.resume` `.skip` `.stop`\n"
         f"  `.queue` `.now` `.volume`\n"
-        "\n"
-        f"{stylish('SOUND (0-100 = max loud)')}\n"
-        f"  `.loud 100` `.gain 100` `.boost 100` `.eco 50`\n"
-        f"  `.bass 100` `.treble 50` `.mix 100` `.max` 💯\n"
-        f"  `.volume <0-200>` `.loop` `.repeat`\n"
+        f"\n{stylish('LOOP')}\n"
+        f"  `.loop` `.repeat`\n"
+        f"\n{stylish('SOUND (0-100)')}\n"
+        f"  `.loud` `.gain` `.boost` `.eco` `.bass` `.treble` `.mix` `.max`\n"
     )
     return core_card("music deck", body, stylish(".play kesariya"))
-
-def page_files_text():
-    body = (
-        f"  `.files`       📁 {stylish('saved list')}\n"
-        f"  `.run 1`       🔁 {stylish('loop file')}\n"
-        f"  `.run 1,2,3`   🔁 {stylish('multi loop')}\n"
-        f"  `.nplay 3`     🎧 {stylish('natural')}\n"
-        f"  `.del 1-10`    🗑️ {stylish('delete')}\n"
-        f"  `.delall`      🗑️ {stylish('sab clear')}\n"
-        f"  `.set`         🎬 {stylish('GIF banner (reply media)')}\n"
-        f"  `.set off`     🚫 {stylish('banner hatao')}\n"
-        f"  `.save <song>` 💾 {stylish('vault me save')}\n"
-        f"  `.ytdl <url>`  🎬 {stylish('video save')}\n"
-    )
-    return core_card("vault / files", body, stylish("saved files kabhi delete nahi hote"))
 
 def page_tools_text():
     body = (
         f"  `.alive` `.ping` `.status`\n"
         f"  `.id` `.chatid` `.whois`\n"
         f"  `.time` `.sysinfo`\n"
-        "\n"
-        f"{stylish('PROFILE')}\n"
+        f"\n{stylish('PROFILE')}\n"
         f"  `.setname` `.setbio` `.setpp` `.getpp`\n"
-        "\n"
-        f"{stylish('UTIL')}\n"
+        f"\n{stylish('UTIL')}\n"
         f"  `.tts` `.qr` `.calc` `.weather`\n"
         f"  `.fancy` `.md5` `.password`\n"
-        "\n"
-        f"{stylish('SUPER')}\n"
+        f"\n{stylish('SUPER')}\n"
         f"  `.lyrics` `.radio` `.speed` `.nightcore` `.bass`\n"
-        f"  `.seek` `.playlist` `.gban` `.restart` `.backup`\n"
-        f"  `.ytdl` `.save` `.clean`\n"
-        "\n"
-        f"{stylish('NOTES')}\n"
-        f"  `.notesadd` `.noteslist` `.notesdel`\n"
+        f"  `.seek` `.gban` `.restart` `.backup` `.clean`\n"
     )
     return core_card("toolkit", body, stylish("sab kuch ek jagah"))
 
@@ -769,17 +426,12 @@ def page_fun_text():
 def page_admin_text():
     body = (
         f"{stylish('OWNER + ADMIN')}\n"
-        f"  `.admin` (reply)  👑 {stylish('replied user ko admin banao')}\n"
-        f"  `.admin add <id|@user>`  👑 {stylish('admin banao')}\n"
+        f"  `.admin` (reply)  👑 admin banao\n"
+        f"  `.admin add <id|@user>`  👑\n"
         f"  `.rm <id>` / `.rm all`  🗑️\n"
-        f"  `.alist`           📋 {stylish('admin list')}\n"
+        f"  `.alist`           📋 admin list\n"
         f"  `.public` / `.private`  🎭\n"
-        "\n"
-        f"{stylish('EXTRA')}\n"
-        f"  `.broadcast` `.stats` `.ytupdate`\n"
-        f"  `.lockmusic` / `.unlockmusic`\n"
-        "\n"
-        f"{stylish('GROUP')}\n"
+        f"\n{stylish('GROUP')}\n"
         f"  `.ban` `.unban` `.kick` `.purge`\n"
         f"  `.promote` `.demote` `.pin` `.unpin`\n"
     )
@@ -789,10 +441,8 @@ def hub_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("♪  Music", callback_data="hub_music"),
          InlineKeyboardButton("🎛  Player", callback_data="cb_panel")],
-        [InlineKeyboardButton("📁  Vault", callback_data="hub_files"),
-         InlineKeyboardButton("🛠  Tools", callback_data="hub_tools")],
-        [InlineKeyboardButton("🎮  Fun", callback_data="hub_fun"),
-         InlineKeyboardButton("👑  Admin", callback_data="cb_admin")],
+        [InlineKeyboardButton("🛠  Tools", callback_data="hub_tools"),
+         InlineKeyboardButton("🎮  Fun", callback_data="hub_fun")],
         [InlineKeyboardButton("📖  Help", callback_data="hub_help"),
          InlineKeyboardButton("✦  Alive", callback_data="hub_alive")],
         [InlineKeyboardButton("ℹ  About", callback_data="hub_about")],
@@ -802,19 +452,15 @@ def fmt_duration(seconds):
     seconds = int(seconds or 0)
     h, rem = divmod(seconds, 3600)
     m, s = divmod(rem, 60)
-    if h:
-        return f"{h}h {m}m {s}s"
-    if m:
-        return f"{m}m {s}s"
+    if h: return f"{h}h {m}m {s}s"
+    if m: return f"{m}m {s}s"
     return f"{s}s"
 
 def _fmt_mss(seconds):
-    """m:ss / h:mm:ss clock format (search result cards ke liye)."""
     seconds = int(seconds or 0)
     m, s = divmod(seconds, 60)
     h, m = divmod(m, 60)
-    if h:
-        return f"{h}:{m:02d}:{s:02d}"
+    if h: return f"{h}:{m:02d}:{s:02d}"
     return f"{m}:{s:02d}"
 
 def fmt_vol(vol):
@@ -822,12 +468,9 @@ def fmt_vol(vol):
 
 def fmt_size(n):
     n = int(n or 0)
-    if n >= 1024 * 1024 * 1024:
-        return f"{n / (1024 * 1024 * 1024):.1f} GB"
-    if n >= 1024 * 1024:
-        return f"{n / (1024 * 1024):.1f} MB"
-    if n >= 1024:
-        return f"{n / 1024:.1f} KB"
+    if n >= 1024*1024*1024: return f"{n/(1024*1024*1024):.1f} GB"
+    if n >= 1024*1024: return f"{n/(1024*1024):.1f} MB"
+    if n >= 1024: return f"{n/1024:.1f} KB"
     return f"{n} B"
 
 def is_url(text):
@@ -844,9 +487,10 @@ def _song_dict(info):
         "source": "youtube",
     }
 
+SOURCE_TAG = {"saavn": "🎧", "youtube": "📺", "soundcloud": "🟠",
+              "spotify": "🟢", "deezer": "🔴"}
+
 def search_results_text(results, query, natural=False):
-    """🔎 Search results card — title + artist + album + year + quality + clock,
-    aur niche wahi DEV X CORE footer."""
     head_icon = "🎧" if natural else "🎵"
     head_title = stylish("Natural Search") if natural else stylish("Search Results")
     text = (
@@ -859,59 +503,24 @@ def search_results_text(results, query, natural=False):
         tag = SOURCE_TAG.get(s.get("source"), "🎵")
         text += f"{i+1}. {tag} **{s.get('title', 'Unknown')}**\n"
         bits = []
-        if s.get("uploader"):
-            bits.append(f"👤 {s.get('uploader')}")
-        if s.get("album"):
-            bits.append(f"💿 {s.get('album')}")
-        if s.get("year"):
-            bits.append(f"📅 {s.get('year')}")
-        if s.get("quality"):
-            bits.append(f"🔊 {s.get('quality')}")
+        if s.get("uploader"): bits.append(f"👤 {s.get('uploader')}")
+        if s.get("album"): bits.append(f"💿 {s.get('album')}")
+        if s.get("year"): bits.append(f"📅 {s.get('year')}")
+        if s.get("quality"): bits.append(f"🔊 {s.get('quality')}")
         bits.append(f"⏱️ {_fmt_mss(s.get('duration', 0))}")
         text += "    " + " · ".join(bits) + "\n"
     text += (
-        "\n👇 "
-        + (stylish("Select — natural sound me play hoga") if natural else stylish("Select a song"))
-        + ":\n"
+        "\n👇 " + (stylish("Select — natural sound me play hoga") if natural else stylish("Select a song")) + ":\n"
         f"🔢 {stylish('reply karo')} `1` · `1,3,5` · `1-3` · `all` {stylish('ya button dabao')}\n"
         "━━━━━━━━━━━━━━━━━━━━━\n"
         f"   ✦ {BRAND} ✦"
     )
     return text
 
-# Cookies file (optional): export YouTube cookies from your browser to
-# cookies.txt and put it next to bot.py. This fixes "Sign in to confirm
-# you're not a bot" errors from yt-dlp/YouTube.
+# ==================== YOUTUBE / SEARCH ====================
 COOKIES_FILE = "cookies.txt"
 
-def _ydl_opts(extra=None):
-    opts = {
-        "format": "bestaudio/best",
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "default_search": "auto",
-        "skip_download": True,
-        "extractor_retries": 2,
-        "retries": 2,
-        "socket_timeout": 15,          # [FIX] Ubuntu hang nahi hoga
-        "nocheckcertificate": True,    # [FIX] kuch servers ke CA issues ke liye
-    }
-    # Prefer cookies (best) if available; otherwise player-client fallbacks
-    # (web/ios/tv often blocked by YouTube anti-bot; android is most stable)
-    if os.path.exists(COOKIES_FILE):
-        opts["cookiefile"] = COOKIES_FILE
-    else:
-        opts["extractor_args"] = {
-            "youtube": {"player_client": ["android", "android_vr", "tv_embedded", "web_embedded"]}
-        }
-    if extra:
-        opts.update(extra)
-    return opts
-
 def _try_resolve(query):
-    """Resolve with android first, phir baki clients, phir default.
-    Har attempt pe socket_timeout — kabhi atakta nahi."""
     attempts = []
     if os.path.exists(COOKIES_FILE):
         attempts = [None]
@@ -966,515 +575,22 @@ def resolve_songs(query, limit=5):
     entries = info.get("entries", []) if info else []
     return [_song_dict(e) for e in entries if e and e.get("webpage_url")]
 
-# ==================== SAVED FILES ====================
-def playing_paths():
-    return {p for p in current_files.values() if p}
-
-# ==================== TEMP SONGS (auto-delete) ====================
-# .play / .nplay se stream kiye gaye songs (youtube/saavn/spotify/deezer/
-# soundcloud) vault me STORE NAHI hote — unke files auto-delete hote hain.
-TEMP_PREFIXES = ("yt_", "saavn_", "inv_", "ytv_")
-
-def _is_temp_song(song):
-    return bool(song and song.get("temp"))
-
-def _delete_temp_song_files(song):
-    """Temp (streamed) song ke downloaded files delete karo."""
-    if not _is_temp_song(song):
-        return
-    playing = playing_paths()
-    for key in ("_file", "local_path"):
-        p = song.get(key)
-        if not p:
-            continue
-        try:
-            if os.path.exists(p) and p not in playing:
-                os.remove(p)
-        except Exception:
-            pass
-        try:
-            db.c.execute("DELETE FROM files WHERE path=?", (p,))
-        except Exception:
-            pass
-    try:
-        db.conn.commit()
-    except Exception:
-        pass
-
-def _cleanup_temp_queue(q):
-    """Queue me pade temp songs ke files bhi saaf karo (stop/skip pe)."""
-    for s in list(q.songs):
-        _delete_temp_song_files(s)
-
-def register_saved_file(path, title=None, source="", chat_id=0):
-    """Keep downloaded / replied media on disk and index it (no auto-delete)."""
-    if not path or not os.path.exists(path):
-        return
-    db.add_file(path, title or os.path.basename(path), source, chat_id)
-
-def sync_saved_files():
-    """Pick up any files sitting in TEMP_DIR that are not in the DB yet.
-    Temp stream files (yt_/saavn_/inv_/ytv_) vault me nahi aate — wo
-    auto-delete hote hain, isliye yahan skip."""
-    try:
-        known = {r[0] for r in db.c.execute("SELECT path FROM files").fetchall()}
-    except Exception:
-        known = set()
-    try:
-        for name in os.listdir(TEMP_DIR):
-            if name.startswith(TEMP_PREFIXES):
-                continue  # temp stream file — vault me nahi
-            fp = os.path.join(TEMP_DIR, name)
-            if os.path.isfile(fp) and fp not in known:
-                src = "saavn" if name.startswith("saavn_") else (
-                    "youtube" if name.startswith("yt_") else "local"
-                )
-                db.add_file(fp, name, src, 0)
-    except Exception as e:
-        logger.error("sync_saved_files: %s", e)
-
-def parse_index_spec(spec, total):
-    """Parse '1-10' / '1,2,3' / '1-3,5,8-10' into 0-based unique sorted indices."""
-    indices = set()
-    spec = (spec or "").replace(" ", "")
-    if not spec:
-        raise ValueError("empty")
-    for part in spec.split(","):
-        if not part:
-            continue
-        if "-" in part:
-            a, b = part.split("-", 1)
-            if not a.isdigit() or not b.isdigit():
-                raise ValueError(part)
-            start, end = int(a), int(b)
-            if start > end:
-                start, end = end, start
-            if start < 1 or end < 1:
-                raise ValueError(part)
-            for i in range(start, end + 1):
-                if 1 <= i <= total:
-                    indices.add(i - 1)
-        else:
-            if not part.isdigit():
-                raise ValueError(part)
-            i = int(part)
-            if 1 <= i <= total:
-                indices.add(i - 1)
-    return sorted(indices)
-
-def resolve_file_spec(spec, rows):
-    """Parse `.run/.vrun/.nplay` file spec into 0-based indices.
-    Supports:
-      'all' / '*' / 'etc'  — saari files
-      '3'                  — single file
-      '1,2,3'              — multiple (jitne chahe)
-      '1-10'               — range
-      '1-3,7,9'            — mix
-      '5,etc'              — #5 se aakhri tak (etc = continue to end)
-      '1,2,etc'            — 1,2 aur phir aakhri tak saari
-    Returns None if invalid."""
-    spec = (spec or "").strip().replace(" ", "")
-    if not spec:
-        return None
-    low = spec.lower()
-    if low in ("all", "*", "etc"):
-        return list(range(len(rows))) if rows else []
-    if low.endswith("etc"):
-        # `5,etc` / `1,2,etc` — diye gaye numbers ke BAAD baaki saari files
-        head = spec[:-3].rstrip(",").rstrip("-")
-        base = set()
-        if head:
-            try:
-                base = set(parse_index_spec(head, len(rows)))
-            except ValueError:
-                return None
-        start = max(base) + 1 if base else 0
-        base.update(range(start, len(rows)))
-        return sorted(base) if base else None
-    if spec.isdigit():
-        i = int(spec)
-        return [i - 1] if 1 <= i <= len(rows) else None
-    try:
-        indices = parse_index_spec(spec, len(rows))
-        return indices if indices else None
-    except ValueError:
-        return None
-
-def files_list_text(page=0, per_page=15):
-    sync_saved_files()
-    rows = db.get_files()
-    total = len(rows)
-    total_size = sum(r[4] or 0 for r in rows)
-    pages = max(1, (total + per_page - 1) // per_page)
-    page = max(0, min(page, pages - 1))
-    start = page * per_page
-    chunk = rows[start:start + per_page]
-    playing = playing_paths()
-
-    text = (
-        f"📁 『{BRAND}』 — {stylish('Saved Files')}\n"
-        "━━━━━━━━━━━━━━━━━━━━━\n"
-    )
-    if not chunk:
-        text += f"📭 {stylish('No saved files.')}\n"
-    else:
-        for n, r in enumerate(chunk, start + 1):
-            _id, path, title, source, size, _chat, created = r
-            tag = "🎧" if source == "saavn" else ("📺" if source == "youtube" else "💾")
-            now = " ▶️" if path in playing else ""
-            name = (title or os.path.basename(path) or "?")[:50]
-            text += f"`{n}.` {tag} {name}{now}\n    {fmt_size(size)} · {source or 'file'}\n"
-    text += (
-        "━━━━━━━━━━━━━━━━━━━━━\n"
-        f"{stylish('Total')}: {total} {stylish('files')} · {fmt_size(total_size)}"
-    )
-    if total:
-        text += f" · {stylish('Page')} {page + 1}/{pages}"
-    text += (
-        f"\n\n`.files` — {stylish('list files')}\n"
-        f"`.run1` / `.run 1` — {stylish('loop saved file #1')}\n"
-        f"`.run 1,2,3` / `.run 5,etc` / `.run all` — 🔁 {stylish('sequential loop')}\n"
-        f"`.nplay 3` — 🎧 {stylish('natural play (no fx)')}\n"
-        f"`.vrun1` — {stylish('loop saved file as video')}\n"
-        f"`.del 1-10` — {stylish('delete 1 to 10')}\n"
-        f"`.del 1,2,3` — {stylish('delete selected')}\n"
-        f"`.delall` — {stylish('delete all (skips playing)')}"
-    )
-    nav = []
-    if page > 0:
-        nav.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"cb_fpage_{page - 1}"))
-    if page < pages - 1:
-        nav.append(InlineKeyboardButton("Next ➡️", callback_data=f"cb_fpage_{page + 1}"))
-    rows_kb = [nav] if nav else []
-    rows_kb.append([
-        InlineKeyboardButton("🔄 Refresh", callback_data=f"cb_fpage_{page}"),
-        InlineKeyboardButton("🗑 Del All", callback_data="cb_delall"),
-    ])
-    rows_kb.append([InlineKeyboardButton("🏠 Main Menu", callback_data="cb_menu")])
-    return text, InlineKeyboardMarkup(rows_kb)
-
-def delete_files_by_indices(indices):
-    """Delete listed (0-based) files. Skip anything currently playing."""
-    rows = db.get_files()
-    playing = playing_paths()
-    deleted, skipped, missing = [], [], []
-    for i in indices:
-        if i < 0 or i >= len(rows):
-            missing.append(i + 1)
-            continue
-        _id, path, title, source, size, _chat, created = rows[i]
-        name = title or os.path.basename(path)
-        if path in playing:
-            skipped.append(name)
-            continue
-        db.delete_file_by_path(path)
-        deleted.append(name)
-    return deleted, skipped, missing
-
-def delete_all_saved_files():
-    rows = db.get_files()
-    playing = playing_paths()
-    deleted = 0
-    skipped = 0
-    for r in rows:
-        path = r[1]
-        if path in playing:
-            skipped += 1
-            continue
-        db.delete_file_by_path(path)
-        deleted += 1
-    # leftover orphans in TEMP_DIR (not currently playing)
-    try:
-        for name in os.listdir(TEMP_DIR):
-            fp = os.path.join(TEMP_DIR, name)
-            if os.path.isfile(fp) and fp not in playing:
-                try:
-                    os.remove(fp)
-                    deleted += 1
-                except Exception:
-                    pass
-    except Exception:
-        pass
-    return deleted, skipped
-
-VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v"}
-
-# ==================== BANNER -> GIF (attached to menu) ====================
-def _run_ffmpeg(args):
-    """Run ffmpeg quietly; raise on failure. Needed to make GIFs."""
-    import shutil as _sh, subprocess as _sp
-    if _sh.which("ffmpeg") is None:
-        raise RuntimeError("ffmpeg not found — install: sudo apt install -y ffmpeg")
-    r = _sp.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", *args],
-                capture_output=True, text=True)
-    if r.returncode != 0:
-        raise RuntimeError((r.stderr or "ffmpeg failed").strip()[:300])
-
-def video_to_gif(src, dest, max_dur=15, fps=15, width=480):
-    """Video -> small looping mp4 (no audio). Telegram plays mp4 sent via
-    send_animation as a looping GIF, at a much smaller size than .gif."""
-    _run_ffmpeg([
-        "-i", src,
-        "-t", str(max_dur),
-        "-vf", f"fps={fps},scale='min({width},iw)':-2:flags=lanczos",
-        "-an",
-        "-c:v", "libx264",
-        "-pix_fmt", "yuv420p",
-        "-movflags", "+faststart",
-        dest,
-    ])
-
-def photo_to_gif(src, dest, width=480, frames=10):
-    """Photo -> animated GIF with a gentle zoom pulse (infinite loop)."""
-    try:
-        from PIL import Image
-    except Exception:
-        raise RuntimeError("Pillow not installed — pip install pillow")
-    im = Image.open(src).convert("RGB")
-    im.thumbnail((width, width), Image.LANCZOS)
-    w, h = im.size
-    base = min(w, h)
-    n = max(2, frames)
-    out = []
-    for i in range(n):
-        k = 1.0 + 0.045 * (0.5 - 0.5 * math.cos(2 * math.pi * i / n))
-        cw, ch = min(w, int(base * k)), min(h, int(base * k))
-        x0, y0 = (w - cw) // 2, (h - ch) // 2
-        crop = im.crop((x0, y0, x0 + cw, y0 + ch)).resize((w, h), Image.LANCZOS)
-        out.append(crop)
-    out[0].save(dest, save_all=True, append_images=out[1:],
-                duration=80, loop=0, optimize=True)
-
-def convert_default_logo():
-    """One-time: turn banner/devx_logo.png into a GIF so the default logo
-    also attaches to menus as a GIF."""
-    src = os.path.join(BANNER_DIR, "devx_logo.png")
-    dst = os.path.join(BANNER_DIR, "devx_logo.gif")
-    if not os.path.exists(src) or os.path.exists(dst):
-        return
-    try:
-        photo_to_gif(src, dst)
-        logger.info("Default logo converted to GIF")
-    except Exception as e:
-        logger.error("logo->gif failed: %s", e)
-
-async def send_with_banner(message, text, reply_markup=None):
-    """Send the .set GIF banner WITH the menu text attached as caption —
-    ONE single message. Falls back to text-only when no banner is set,
-    or the text is too long for a Telegram caption (1024 chars)."""
-    path = db.get_config("banner_path") or ""
-    kind = (db.get_config("banner_kind") or "animation").lower()
-    default_logo = os.path.join(BANNER_DIR, "devx_logo.png")
-    default_gif = os.path.join(BANNER_DIR, "devx_logo.gif")
-    if not path or not os.path.exists(path):
-        if os.path.exists(default_gif):
-            path, kind = default_gif, "animation"
-        elif os.path.exists(default_logo):
-            path, kind = default_logo, "photo"
-    if path and os.path.exists(path):
-        # Telegram captions cap at 1024 chars — attach only when it fits
-        caption = text if len(text) <= 1024 else None
-        try:
-            if kind in ("animation", "gif"):
-                await message.reply_animation(path, caption=caption, reply_markup=reply_markup)
-            elif kind == "photo":
-                await message.reply_photo(path, caption=caption, reply_markup=reply_markup)
-            else:
-                await message.reply_video(path, caption=caption, reply_markup=reply_markup,
-                                          supports_streaming=True)
-            if caption is not None:
-                return  # attached — single message, done
-        except Exception as e:
-            logger.error("banner send: %s", e)
-    await message.reply_text(text, reply_markup=reply_markup)
-
-async def start_local_loop(chat_id, path, title, video=False, status=None):
-    """Loop a local saved file the same way .run / .vrun does (one message)."""
-    song = {
-        "title": title or os.path.basename(path),
-        "duration": 0,
-        "uploader": "DEV X CORE",
-        "local_path": path,
-        "source": "local",
-        "loudspeaker": True,
-        "video": bool(video),
-    }
-    q = get_queue(chat_id)
-    q.repeat = True
-    q.loop = False
-    q.songs.clear()
-    q.current = song
-    active_calls.add(chat_id)
-    err_notified.discard(chat_id)
-    ok = await play_song(chat_id, song, announce=False, silent=True)
-    if ok:
-        kind = stylish("Video Looping") if video else stylish("Looping (Loudspeaker)")
-        icon = "🎬" if video else "🔁"
-        msg = (
-            f"{icon} 『{BRAND}』 — {kind}\n"
-            f"🎵 `{song['title']}`\n"
-            f"📢 {stylish('Extra gain + loudspeaker ON')}\n"
-            f"💾 {stylish('Saved file — silent loop, no spam')}"
-        )
-        if status:
-            await status.edit_text(msg)
-        else:
-            await music.send_message(chat_id, msg)
-        return True
-    q.repeat = False
-    active_calls.discard(chat_id)
-    fail = (
-        f"❌ 『{BRAND}』 — {stylish('Could not start loop')}\n"
-        f"{stylish('Start a voice chat first, then retry.')}"
-    )
-    if status:
-        await status.edit_text(fail)
-    else:
-        await music.send_message(chat_id, fail)
-    return False
-
-async def play_saved_index(message, index_1based, as_video=False, natural=False):
-    sync_saved_files()
-    rows = db.get_files()
-    if not rows:
-        await message.reply_text(f"📭 {stylish('No saved files.')} `.files`")
-        return
-    if index_1based < 1 or index_1based > len(rows):
-        await message.reply_text(
-            f"❌ {stylish('Invalid number.')} {stylish('Valid')}: `1`–`{len(rows)}`\n`.files`"
-        )
-        return
-    _id, path, title, source, size, _chat, created = rows[index_1based - 1]
-    if not path or not os.path.exists(path):
-        await message.reply_text("❌ File missing from disk. `.files` to refresh.")
-        return
-    name = title or os.path.basename(path)
-
-    if natural:
-        # 🎧 .nplay — natural sound, one time (no loop, no effects)
-        song = {
-            "title": name,
-            "duration": 0,
-            "uploader": "DEV X CORE",
-            "local_path": path,
-            "source": "local",
-            "normal": True,
-        }
-        q = get_queue(message.chat.id)
-        q.songs.append(song)
-        if not q.current:
-            q.current = q.songs.popleft()
-            active_calls.add(message.chat.id)
-            await play_song(message.chat.id, q.current)
-        else:
-            await message.reply_text(f"✅ 🎧 {stylish('Queued (natural)')}: **{name}**")
-        return
-
-    st = await message.reply_text(
-        f"🔁 『{BRAND}』 — {stylish('Playing saved file')} `#{index_1based}`\n🎵 {name}"
-    )
-    await start_local_loop(message.chat.id, path, name, video=as_video, status=st)
-
-async def play_saved_list(message, indices, as_video=False, natural=False):
-    """🔁 Playlist mode: diye gaye file numbers ek ke baad ek chalenge.
-    natural=False -> set khatam hone ke baad wapas pehle se (loop).
-    natural=True  -> 🎧 natural sound, set ek baar chala kar ruk jayega.
-    Kitne bhi tracks de sakte ho (2, 3, 10, 50, ... ya `all`)."""
-    sync_saved_files()
-    rows = db.get_files()
-    if not rows:
-        await message.reply_text(f"📭 {stylish('No saved files.')} `.files`")
-        return
-    q = get_queue(message.chat.id)
-    songs = []
-    names = []
-    for i in indices:
-        if i < 0 or i >= len(rows):
-            continue
-        _id, path, title, source, size, _chat, created = rows[i]
-        if not path or not os.path.exists(path):
-            continue
-        name = title or os.path.basename(path)
-        songs.append({
-            "title": name,
-            "duration": 0,
-            "uploader": "DEV X CORE",
-            "local_path": path,
-            "source": "local",
-            "loudspeaker": not natural,
-            "normal": bool(natural),
-            "video": bool(as_video),
-        })
-        names.append(name)
-    if not songs:
-        await message.reply_text(
-            f"❌ {stylish('No valid files found.')}\n"
-            f"{stylish('Valid range')}: `1`–`{len(rows)}` — `.files`"
-        )
-        return
-    q.loop = not natural
-    q.repeat = False
-    q.silent_loop = True  # 🔁 repeat pe har cycle ka spam nahi
-    q.songs.clear()
-    for s in songs[1:]:
-        q.songs.append(s)
-    q.current = songs[0]
-    active_calls.add(message.chat.id)
-    err_notified.discard(message.chat.id)
-    ok = await play_song(message.chat.id, q.current, announce=True)
-    if ok:
-        # listing: pehle 25 naam + total count (jitne bhi tracks ho)
-        shown = names[:25]
-        listing = "\n".join(f"  {n + 1}. 🎵 {nm}" for n, nm in enumerate(shown))
-        if len(names) > len(shown):
-            listing += f"\n  … +{len(names) - len(shown)} more"
-        head = f"{'🎧' if natural else '🔁'} 『{BRAND}』 — " + stylish(
-            "Natural Playlist" if natural else "Sequential Loop"
-        )
-        footer = (
-            f"{stylish('ek ke baad ek — set ek baar chala kar ruk jayega')}"
-            if natural else
-            f"{stylish('ek ke baad ek chalenge — set repeat hota rahega')}"
-        )
-        await message.reply_text(
-            head + "\n"
-            "━━━━━━━━━━━━━━━━━━━━━\n"
-            f"{listing}\n"
-            "━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📚 {stylish('total')}: {len(names)} {stylish('tracks')}\n"
-            f"{footer}"
-        )
-    else:
-        q.loop = False
-        q.current = None
-        active_calls.discard(message.chat.id)
-
 # ==================== JIOSAAVN ====================
 SAAVN_API = "https://www.jiosaavn.com/api.php"
 SAAVN_FALLBACK = "https://saavnapi-nine.vercel.app/result/"
-DEEZER_API = "https://api.deezer.com"
 SAAVN_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "Referer": "https://www.jiosaavn.com/",
     "Accept": "application/json, text/plain, */*",
 }
 
 async def saavn_auth_url(enc_url, bitrate=320):
-    """Turn JioSaavn encrypted_media_url into a playable CDN URL."""
     if not enc_url:
         return None
     timeout = aiohttp.ClientTimeout(total=20)
     params = {
-        "__call": "song.generateAuthToken",
-        "url": enc_url,
-        "bitrate": str(bitrate),
-        "api_version": "4",
-        "_format": "json",
-        "ctx": "web6dot0",
-        "_marker": "0",
+        "__call": "song.generateAuthToken", "url": enc_url, "bitrate": str(bitrate),
+        "api_version": "4", "_format": "json", "ctx": "web6dot0", "_marker": "0",
     }
     try:
         async with aiohttp.ClientSession(headers=SAAVN_HEADERS) as session:
@@ -1485,32 +601,6 @@ async def saavn_auth_url(enc_url, bitrate=320):
         logger.error("Saavn auth token error: %s", e)
         return None
 
-def _saavn_thumb(r):
-    img = r.get("image")
-    if isinstance(img, str):
-        return img.replace("50x50", "500x500").replace("150x150", "500x500")
-    if isinstance(img, list) and img:
-        last = img[-1]
-        return last.get("url", "") if isinstance(last, dict) else (last or "")
-    return ""
-
-def _saavn_artist(r):
-    mi = r.get("more_info") or {}
-    am = mi.get("artistMap") or r.get("artistMap") or {}
-    prim = am.get("primary_artists") or []
-    if isinstance(prim, list) and prim:
-        names = [a.get("name", "") for a in prim if isinstance(a, dict)]
-        names = [n for n in names if n]
-        if names:
-            return ", ".join(names)
-    return (
-        r.get("primary_artists")
-        or r.get("singers")
-        or r.get("subtitle")
-        or mi.get("music")
-        or "JioSaavn"
-    )
-
 def _saavn_duration(r):
     mi = r.get("more_info") if isinstance(r.get("more_info"), dict) else {}
     raw = (mi or {}).get("duration") or r.get("duration") or 0
@@ -1520,7 +610,6 @@ def _saavn_duration(r):
         return 0
 
 def _saavn_direct_url(r):
-    """saavnapi-nine result se best playable URL (auth ki zaroorat nahi)."""
     for key in ("media_url", "download_url", "url"):
         v = r.get(key)
         if isinstance(v, str) and v.startswith("http"):
@@ -1528,7 +617,6 @@ def _saavn_direct_url(r):
     return None
 
 async def _saavn_nine_raw(query):
-    """saavnapi-nine se raw results list (play-time resolve ke liye bhi)."""
     timeout = aiohttp.ClientTimeout(total=25)
     async with aiohttp.ClientSession(headers=SAAVN_HEADERS) as session:
         async with session.get(SAAVN_FALLBACK, params={"query": query}, timeout=timeout) as resp:
@@ -1540,14 +628,8 @@ async def _saavn_nine_raw(query):
     return []
 
 async def saavn_search(query, limit=5):
-    """🔎 Saavn search — pehle saavnapi-nine (complete info + direct stream),
-    phir official JioSaavn API. Har song me: title/artist/album/year/
-    quality/duration/direct URL. SIRF playable songs dikhte hain —
-    jinke paas stream URL nahi milta unhe skip kar dete hain."""
     timeout = aiohttp.ClientTimeout(total=25)
     songs = []
-
-    # ---- 1) saavnapi-nine (complete: song/singers/album/image/year/320kbps) ----
     try:
         raw = await _saavn_nine_raw(query)
         for r in (raw or [])[:limit]:
@@ -1561,7 +643,7 @@ async def saavn_search(query, limit=5):
                 except Exception:
                     direct = None
             if not direct:
-                continue  # ⛔ playable nahi -> skip
+                continue
             songs.append({
                 "title": r.get("song") or r.get("name") or r.get("title") or "Unknown",
                 "duration": _saavn_duration(r),
@@ -1576,23 +658,14 @@ async def saavn_search(query, limit=5):
                 "source": "saavn",
             })
         if songs:
-            logger.info("Saavn nine search: %d hits for %r", len(songs), query)
             return songs
     except Exception as e:
         logger.error("Saavn nine search error: %s", e)
-
-    # ---- 2) official JioSaavn API (backup) ----
     try:
         params = {
-            "__call": "search.getResults",
-            "_format": "json",
-            "_marker": "0",
-            "cc": "in",
-            "p": "1",
-            "n": str(max(int(limit), 5)),
-            "q": query,
-            "api_version": "4",
-            "ctx": "web6dot0",
+            "__call": "search.getResults", "_format": "json", "_marker": "0",
+            "cc": "in", "p": "1", "n": str(max(int(limit), 5)), "q": query,
+            "api_version": "4", "ctx": "web6dot0",
         }
         async with aiohttp.ClientSession(headers=SAAVN_HEADERS) as session:
             async with session.get(SAAVN_API, params=params, timeout=timeout) as resp:
@@ -1608,69 +681,47 @@ async def saavn_search(query, limit=5):
             mi = r.get("more_info") if isinstance(r.get("more_info"), dict) else {}
             enc = r.get("encrypted_media_url") or (mi or {}).get("encrypted_media_url")
             if not enc:
-                continue  # ⛔ playable nahi -> skip
+                continue
             auth = await saavn_auth_url(enc)
             if not auth:
-                continue  # ⛔ auth fail -> skip
+                continue
             songs.append({
                 "title": r.get("title") or r.get("song") or "Unknown",
                 "duration": _saavn_duration(r),
-                "uploader": _saavn_artist(r),
+                "uploader": r.get("primary_artists") or r.get("singers") or r.get("artist") or "JioSaavn",
                 "album": (mi or {}).get("album") or "",
                 "year": str((mi or {}).get("year") or ""),
                 "quality": "320kbps" if (mi or {}).get("320kbps") else ((mi or {}).get("quality") or ""),
                 "webpage_url": r.get("perma_url") or r.get("url") or auth or "",
                 "direct_url": auth,
                 "enc_url": enc,
-                "thumbnail": _saavn_thumb(r),
+                "thumbnail": r.get("image") or "",
                 "source": "saavn",
             })
-        if songs:
-            logger.info("Saavn official search: %d hits for %r", len(songs), query)
     except Exception as e:
         logger.error("Saavn official search error: %s", e)
     return songs
 
-# ==================== SPOTIFY (official API — free keys) ====================
+# ==================== SPOTIFY ====================
 SPOTIFY_TOKEN = {"token": None, "expires": 0}
 
 def spotify_enabled():
     return bool(SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET)
 
-def spotify_setup_help():
-    """Spotify keys kaise banaye — full guide."""
-    return (
-        f"🟢 『{BRAND}』 — {stylish('Spotify API Setup')}\n"
-        "━━━━━━━━━━━━━━━━━━━━━\n"
-        f"{stylish('Free keys banao (2 min)')}:\n"
-        "1️⃣ https://developer.spotify.com/dashboard\n"
-        "2️⃣ Login → Create app (name: DEV X CORE)\n"
-        "3️⃣ App settings me Client ID + Client Secret milega\n"
-        "4️⃣ Server pe env set karke restart:\n"
-        "`export SPOTIFY_CLIENT_ID=your_id`\n"
-        "`export SPOTIFY_CLIENT_SECRET=your_secret`\n"
-        "━━━━━━━━━━━━━━━━━━━━━\n"
-        f"{stylish('Bina keys ke bhi chalega')}: YouTube · Saavn · Deezer · SoundCloud"
-    )
-
 async def spotify_get_token():
-    """Client-credentials token (auto refresh). None if not configured."""
     if SPOTIFY_TOKEN["token"] and time.time() < SPOTIFY_TOKEN["expires"] - 60:
         return SPOTIFY_TOKEN["token"]
     if not spotify_enabled():
         return None
     try:
         import base64 as _b64
-        cred = _b64.b64encode(
-            f"{SPOTIFY_CLIENT_ID}:{SPOTIFY_CLIENT_SECRET}".encode()
-        ).decode()
+        cred = _b64.b64encode(f"{SPOTIFY_CLIENT_ID}:{SPOTIFY_CLIENT_SECRET}".encode()).decode()
         timeout = aiohttp.ClientTimeout(total=20)
         async with aiohttp.ClientSession() as s:
             async with s.post(
                 "https://accounts.spotify.com/api/token",
                 data={"grant_type": "client_credentials"},
-                headers={"Authorization": f"Basic {cred}",
-                         "Content-Type": "application/x-www-form-urlencoded"},
+                headers={"Authorization": f"Basic {cred}", "Content-Type": "application/x-www-form-urlencoded"},
                 timeout=timeout,
             ) as r:
                 data = await r.json(content_type=None)
@@ -1691,12 +742,8 @@ def _sp_track_to_song(t):
     dur = int((t.get("duration_ms") or 0) / 1000)
     release = (t.get("album") or {}).get("release_date", "") or ""
     return {
-        "title": name,
-        "duration": dur,
-        "uploader": artists,
-        "album": album,
-        "year": release[:4],
-        "quality": "Spotify",
+        "title": name, "duration": dur, "uploader": artists, "album": album,
+        "year": release[:4], "quality": "Spotify",
         "webpage_url": (t.get("external_urls") or {}).get("spotify") or "",
         "thumbnail": images[0].get("url", "") if images else "",
         "source": "spotify",
@@ -1704,7 +751,6 @@ def _sp_track_to_song(t):
     }
 
 async def spotify_search(query, limit=3):
-    """🟢 Spotify search — metadata rich results (audio YouTube se resolve hota hai)."""
     try:
         tok = await spotify_get_token()
         if not tok:
@@ -1720,8 +766,6 @@ async def spotify_search(query, limit=3):
                 data = await r.json(content_type=None)
         items = ((data or {}).get("tracks") or {}).get("items") or []
         songs = [_sp_track_to_song(t) for t in items if isinstance(t, dict)]
-        if songs:
-            logger.info("Spotify search: %d hits for %r", len(songs), query)
         return songs[:limit]
     except Exception as e:
         logger.error("Spotify search error: %s", e)
@@ -1730,9 +774,6 @@ async def spotify_search(query, limit=3):
 SPOTIFY_LINK_RE = re.compile(r"open\.spotify\.com/(track|album|playlist)/([A-Za-z0-9]+)")
 
 async def spotify_expand(query):
-    """🟢 Spotify link (track/album/playlist) -> songs list.
-    None = spotify link nahi. Raises RuntimeError if keys not configured.
-    [] = link mila par tracks nahi mile."""
     m = SPOTIFY_LINK_RE.search(query or "")
     if not m:
         return None
@@ -1762,13 +803,13 @@ async def spotify_expand(query):
                     items.extend(c for c in chunk if isinstance(c, dict) and c.get("name"))
                     url = data.get("next") or None
         songs = [_sp_track_to_song(t) for t in items]
-        logger.info("Spotify expand %s/%s: %d tracks", kind, sid, len(songs))
         return songs
     except Exception as e:
         logger.error("Spotify expand error: %s", e)
         return []
 
-# ==================== DEEZER (public API — bina keys ke) ====================
+# ==================== DEEZER ====================
+DEEZER_API = "https://api.deezer.com"
 DEEZER_LINK_RE = re.compile(r"deezer\.com/(?:[a-z]{2}/)?(track|album|playlist)/(\d+)")
 
 def _dz_track_to_song(t):
@@ -1777,19 +818,13 @@ def _dz_track_to_song(t):
     cover = (t.get("album") or {}).get("cover_big", "") if isinstance(t.get("album"), dict) else ""
     title = t.get("title") or "Unknown"
     return {
-        "title": title,
-        "duration": int(t.get("duration") or 0),
-        "uploader": artist or "Deezer",
-        "album": album,
-        "quality": "Deezer",
-        "webpage_url": t.get("link") or "",
-        "thumbnail": cover,
-        "source": "deezer",
-        "resolve_query": f"{title} {artist}",
+        "title": title, "duration": int(t.get("duration") or 0),
+        "uploader": artist or "Deezer", "album": album, "quality": "Deezer",
+        "webpage_url": t.get("link") or "", "thumbnail": cover,
+        "source": "deezer", "resolve_query": f"{title} {artist}",
     }
 
 async def deezer_search(query, limit=3):
-    """🔴 Deezer search — public API, bina keys ke (audio YouTube se resolve hota hai)."""
     try:
         timeout = aiohttp.ClientTimeout(total=20)
         async with aiohttp.ClientSession() as s:
@@ -1799,16 +834,12 @@ async def deezer_search(query, limit=3):
                 data = await r.json(content_type=None)
         items = ((data or {}).get("data") or []) if isinstance(data, dict) else []
         songs = [_dz_track_to_song(t) for t in items if isinstance(t, dict)]
-        if songs:
-            logger.info("Deezer search: %d hits for %r", len(songs), query)
         return songs[:limit]
     except Exception as e:
         logger.error("Deezer search error: %s", e)
         return []
 
 async def deezer_expand(query):
-    """🔴 Deezer link (track/album/playlist) -> songs list.
-    None = deezer link nahi. [] = link mila par tracks nahi mile / error."""
     m = DEEZER_LINK_RE.search(query or "")
     if not m:
         return None
@@ -1823,25 +854,18 @@ async def deezer_expand(query):
         else:
             items = (((data or {}).get("tracks") or {}).get("data") or []) if isinstance(data, dict) else []
         songs = [_dz_track_to_song(t) for t in items if isinstance(t, dict)]
-        logger.info("Deezer expand %s/%s: %d tracks", kind, did, len(songs))
         return songs
     except Exception as e:
         logger.error("Deezer expand error: %s", e)
         return []
 
-# ==================== SOUNDCLOUD (yt-dlp scsearch — full streams) ====================
+# ==================== SOUNDCLOUD ====================
 def soundcloud_search(query, limit=2):
-    """🟠 SoundCloud search — yt-dlp se (full tracks playable hain)."""
     try:
         opts = {
-            "format": "bestaudio/best",
-            "quiet": True,
-            "no_warnings": True,
-            "noplaylist": True,
-            "skip_download": True,
-            "extract_flat": True,
-            "socket_timeout": 15,
-            "extractor_retries": 2,
+            "format": "bestaudio/best", "quiet": True, "no_warnings": True,
+            "noplaylist": True, "skip_download": True, "extract_flat": True,
+            "socket_timeout": 15, "extractor_retries": 2,
         }
         if os.path.exists(COOKIES_FILE):
             opts["cookiefile"] = COOKIES_FILE
@@ -1860,17 +884,12 @@ def soundcloud_search(query, limit=2):
                 "thumbnail": e.get("thumbnail") or "",
                 "source": "soundcloud",
             })
-        if songs:
-            logger.info("SoundCloud search: %d hits for %r", len(songs), query)
         return songs[:limit]
     except Exception as e:
         logger.error("SoundCloud search error: %s", e)
         return []
 
 def _sync_play_loop(q):
-    """🔁 DEFAULT LOOP ON for .play — jo bhi songs choose kiye, wahi loop me chalein.
-    Single -> repeat (gapless). 2+ -> sequential loop.
-    Koi bhi join/event playback RESTART nahi karta — loop apna kaam karta rehta hai."""
     total = (1 if q.current is not None else 0) + len(q.songs)
     if total <= 1:
         q.repeat = True
@@ -1880,16 +899,14 @@ def _sync_play_loop(q):
         q.repeat = False
     q.silent_loop = True
 
-
 async def _queue_songs(message, songs, natural=False, label=""):
-    """Multiple songs ko queue me daalo + agar kuch nahi chal raha to start karo."""
     chat_id = message.chat.id
     q = get_queue(chat_id)
     if natural:
         for s in songs:
             s["normal"] = True
     q.songs.extend(songs)
-    _sync_play_loop(q)   # 🔁 playlist loop me chale
+    _sync_play_loop(q)
     if not q.current:
         q.current = q.songs.popleft()
         active_calls.add(chat_id)
@@ -1901,10 +918,7 @@ async def _queue_songs(message, songs, natural=False, label=""):
         f"🎵 {songs[0]['title']}{extra}"
     )
 
-# 🔢 SEARCH NUMBER SELECTION (reply se bhi select karo)
 async def _play_picked_songs(message, sid, indices, natural=False):
-    """Search results me se selected numbers ko play/queue karo.
-    Returns (started, queued, first_title) — fail pe (False, 0, None)."""
     results = search_cache.get(sid)
     if not results:
         await message.reply_text("❌ Search expired — dobara `.play <song>` karo.")
@@ -1924,7 +938,7 @@ async def _play_picked_songs(message, sid, indices, natural=False):
         return False, 0, None
     started = False
     q.songs.extend(songs)
-    _sync_play_loop(q)   # 🔁 chosen songs loop me chalein (1=repeat, 2+=sequential)
+    _sync_play_loop(q)
     if not q.current:
         q.current = q.songs.popleft()
         active_calls.add(message.chat.id)
@@ -1934,12 +948,8 @@ async def _play_picked_songs(message, sid, indices, natural=False):
             return False, 0, None
     return started, len(songs), songs[0].get("title", "")
 
-# [FIX] search-results source tags
-SOURCE_TAG = {"saavn": "🎧", "youtube": "📺", "soundcloud": "🟠",
-              "spotify": "🟢", "deezer": "🔴"}
-
+# ==================== FFMPEG / STREAM BUILDING ====================
 def _atempo_chain(speed):
-    """ffmpeg atempo max 2.0 per filter — 2x se upar chain banao."""
     speed = float(speed)
     if speed <= 0.1:
         return "atempo=1.0"
@@ -1951,20 +961,16 @@ def _atempo_chain(speed):
     parts.append(f"atempo={remaining:.3f}")
     return ",".join(parts)
 
-
 def _loudspeaker_filter(level):
-    """📢 Loudspeaker/gain filter — 100 = MAX LOUD + CLEAR.
-    BASS KAM (60/120/250) taaki awaz muddy na ho — mid/high clarity ke liye,
-    volume highest (7.0) rahta hai. Limiter clipping rokta hai."""
     lvl = max(0, min(100, int(level or 0)))
-    vol = round(0.8 + (lvl / 100.0) * 6.2, 2)          # 0.8 .. 7.0  (max push — wahi)
-    g60 = round((lvl / 100.0) * 4, 1)                  # 0 .. 4   (bass KAM)
-    g120 = round((lvl / 100.0) * 3.5, 1)               # 0 .. 3.5 (bass KAM)
-    g250 = round(1 + (lvl / 100.0) * 3, 1)             # 1 .. 4   (low-mid KAM)
-    g500 = round(2 + (lvl / 100.0) * 3, 1)             # 2 .. 5
-    g1k = round(3 + (lvl / 100.0) * 3, 1)              # 3 .. 6   (CLARITY boost)
-    g8k = round(2 + (lvl / 100.0) * 3, 1)              # 2 .. 5   (crisp highs)
-    g14k = round(1 + (lvl / 100.0) * 3, 1)             # 1 .. 4
+    vol = round(0.8 + (lvl / 100.0) * 6.2, 2)
+    g60 = round((lvl / 100.0) * 4, 1)
+    g120 = round((lvl / 100.0) * 3.5, 1)
+    g250 = round(1 + (lvl / 100.0) * 3, 1)
+    g500 = round(2 + (lvl / 100.0) * 3, 1)
+    g1k = round(3 + (lvl / 100.0) * 3, 1)
+    g8k = round(2 + (lvl / 100.0) * 3, 1)
+    g14k = round(1 + (lvl / 100.0) * 3, 1)
     return (
         "loudnorm=I=-7:TP=-0.3:LRA=11,"
         f"equalizer=f=60:t=q:w=1.5:g={g60},"
@@ -1978,21 +984,17 @@ def _loudspeaker_filter(level):
         f"volume={vol}"
     )
 
-
 def _ultra_boost_filter(level):
-    """🚀 Ultra booster — 100 = HIGHEST LOUD + CRYSTAL CLEAR.
-    BASS KAM + ECHO KAM taaki awaz saaf rahe, volume highest (9.0).
-    Limiter clipping rokta hai — sirf LOUD, no mud."""
     lvl = max(0, min(100, int(level or 0)))
-    vol = round(1.0 + (lvl / 100.0) * 8.0, 2)          # 1.0 .. 9.0  (highest push — wahi)
-    g60 = round((lvl / 100.0) * 6, 1)                  # 0 .. 6   (bass KAM)
-    g120 = round((lvl / 100.0) * 5, 1)                 # 0 .. 5   (bass KAM)
-    g250 = round(1 + (lvl / 100.0) * 4, 1)             # 1 .. 5   (low-mid KAM)
-    g500 = round(2 + (lvl / 100.0) * 5, 1)             # 2 .. 7
-    g1k = round(3 + (lvl / 100.0) * 5, 1)              # 3 .. 8   (CLARITY boost)
-    g8k = round(3 + (lvl / 100.0) * 4, 1)              # 3 .. 7   (crisp highs)
-    g14k = round(2 + (lvl / 100.0) * 3, 1)             # 2 .. 5
-    echo = round(0.1 + (lvl / 100.0) * 0.15, 2)        # 0.10 .. 0.25 (echo KAM)
+    vol = round(1.0 + (lvl / 100.0) * 8.0, 2)
+    g60 = round((lvl / 100.0) * 6, 1)
+    g120 = round((lvl / 100.0) * 5, 1)
+    g250 = round(1 + (lvl / 100.0) * 4, 1)
+    g500 = round(2 + (lvl / 100.0) * 5, 1)
+    g1k = round(3 + (lvl / 100.0) * 5, 1)
+    g8k = round(3 + (lvl / 100.0) * 4, 1)
+    g14k = round(2 + (lvl / 100.0) * 3, 1)
+    echo = round(0.1 + (lvl / 100.0) * 0.15, 2)
     return (
         "loudnorm=I=-5:TP=-0.2:LRA=11,"
         f"equalizer=f=60:t=q:w=1.5:g={g60},"
@@ -2008,9 +1010,7 @@ def _ultra_boost_filter(level):
         f"volume={vol}"
     )
 
-
 def _echo_filter(level):
-    """🎤 Echo/reverb — level 0-100 pe echo gain scale hota hai."""
     lvl = max(0, min(100, int(level or 0)))
     g1 = round((lvl / 100.0) * 0.5, 2)
     g2 = round(g1 * 0.8, 2)
@@ -2023,32 +1023,22 @@ def _echo_filter(level):
         f"aecho=0.4:0.5:800:{g4}"
     )
 
-
 def _bass_filter(level):
-    """🔊 Bass boost — level 0-100 -> ffmpeg bass g 0-20."""
     lvl = max(0, min(100, int(level or 0)))
     g = round((lvl / 100.0) * 20, 1)
     if g <= 0:
         return None
     return f"bass=g={g}:f=80:w=0.8"
 
-
 def _treble_filter(level):
-    """🎼 Treble boost — level 0-100 -> equalizer 8kHz g 0-12."""
     lvl = max(0, min(100, int(level or 0)))
     g = round((lvl / 100.0) * 12, 1)
     if g <= 0:
         return None
     return f"equalizer=f=8000:t=q:w=1:g={g}"
 
-
 def make_ffmpeg_params(boost_level=0, eco_level=0, loudspeaker_level=0, bass=0, treble=0,
                        loop=False, seek=None, speed=1.0, nightcore=False):
-    """Build ffmpeg params — SAB EFFECTS LEVEL-BASED (0-100).
-    loop=True uses -stream_loop -1 so the file never ends.
-    seek=<seconds> -> -ss input seek: gaana WAHI position se resume hota
-    hai (effect toggle pe restart nahi hota).
-    speed / nightcore -> SUPER audio effects."""
     filters = []
     if loudspeaker_level:
         filters.append(_loudspeaker_filter(loudspeaker_level))
@@ -2063,7 +1053,6 @@ def make_ffmpeg_params(boost_level=0, eco_level=0, loudspeaker_level=0, bass=0, 
     if _t:
         filters.append(_t)
     if nightcore:
-        # 🎧 nightcore: pitch + tempo (classic nightcore chain)
         filters.append("asetrate=44100*1.35,aresample=44100,atempo=1.35")
     else:
         try:
@@ -2075,7 +1064,7 @@ def make_ffmpeg_params(boost_level=0, eco_level=0, loudspeaker_level=0, bass=0, 
     first = "-stream_loop -1" if loop else ""
     seek_pre = f"-ss {int(seek)} " if (seek and int(seek) > 0) else ""
     if filters:
-        return f"{seek_pre}{first} ---mid -filter:a ---mid {','.join(filters)}"
+        return f"{seek_pre}{first} -filter:a {','.join(filters)}"
     if loop:
         return f"{seek_pre}-stream_loop -1"
     if seek_pre:
@@ -2093,20 +1082,496 @@ def build_stream(source, boost_level=0, eco_level=0, loudspeaker_level=0, bass=0
         headers=headers,
     )
 
-def build_video_stream(source, boost_level=0, eco_level=0, loudspeaker_level=0, bass=0, treble=0,
-                       loop=False, seek=None, speed=1.0, nightcore=False, headers=None):
-    """Build a VIDEO stream (audio + video) for group call screen share."""
-    return MediaStream(
-        source,
-        audio_parameters=AudioQuality.HIGH,
-        video_parameters=VideoQuality.HD_720p,
-        ffmpeg_parameters=make_ffmpeg_params(boost_level, eco_level, loudspeaker_level, bass, treble,
-                                             loop=loop, seek=seek, speed=speed, nightcore=nightcore),
-        headers=headers,
-    )
+# ==================== DOWNLOAD / PLAYBACK ====================
+YT_ID_RE = re.compile(r"(?:v=|youtu\.be/|/shorts/|/embed/|/live/|/v/)([A-Za-z0-9_-]{11})")
+
+def extract_youtube_id(query):
+    m = YT_ID_RE.search(query or "")
+    return m.group(1) if m else None
+
+INVIDIOUS_INSTANCES = [
+    "https://inv.nadeko.net",
+    "https://invidious.nerdvpn.de",
+    "https://yewtu.be",
+    "https://invidious.f5.si",
+]
+
+async def invidious_stream_url(video_id):
+    if not video_id:
+        return None
+    for base in INVIDIOUS_INSTANCES:
+        try:
+            timeout = aiohttp.ClientTimeout(total=15)
+            async with aiohttp.ClientSession() as s:
+                async with s.get(f"{base}/api/v1/videos/{video_id}", timeout=timeout) as r:
+                    data = await r.json(content_type=None)
+            fmts = (data or {}).get("adaptiveFormats") or (data or {}).get("formatStreams") or []
+            best = None
+            for f in fmts:
+                if not isinstance(f, dict):
+                    continue
+                if "audio" in (f.get("type") or ""):
+                    if best is None or int(f.get("bitrate") or 0) > int(best.get("bitrate") or 0):
+                        best = f
+            if best and best.get("url"):
+                return best["url"]
+        except Exception as e:
+            logger.warning("Invidious %s fail: %s", base, e)
+            continue
+    return None
+
+async def download_http_audio(url):
+    path = os.path.join(TEMP_DIR, f"inv_{uuid.uuid4().hex}.m4a")
+    timeout = aiohttp.ClientTimeout(total=120)
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, timeout=timeout) as resp:
+            if resp.status != 200:
+                raise RuntimeError(f"HTTP {resp.status}")
+            with open(path, "wb") as f:
+                async for chunk in resp.content.iter_chunked(1024 * 256):
+                    f.write(chunk)
+    if not os.path.exists(path) or os.path.getsize(path) < 1024:
+        raise RuntimeError("download empty")
+    return path
+
+async def _search_guard(coro, seconds=15):
+    try:
+        return await asyncio.wait_for(coro, timeout=seconds)
+    except Exception as e:
+        logger.warning("search guarded (%ss): %s", seconds, e)
+        return []
+
+async def _fetch_youtube_audio(query, title, chat_id, max_wait=100):
+    try:
+        local = await asyncio.wait_for(
+            asyncio.to_thread(download_youtube_file, query), timeout=max_wait)
+        if local and os.path.exists(local) and os.path.getsize(local) > 1024:
+            return local, "youtube"
+    except Exception as e:
+        logger.warning("yt-dlp download fail (%s) -> fallback chain", e)
+
+    if not query.startswith("ytsearch"):
+        vid = extract_youtube_id(query)
+        if vid:
+            try:
+                url = await asyncio.wait_for(invidious_stream_url(vid), timeout=40)
+                if url:
+                    local = await asyncio.wait_for(download_http_audio(url), timeout=90)
+                    if local:
+                        return local, "invidious"
+            except Exception as e:
+                logger.warning("Invidious fallback fail: %s", e)
+
+    if title:
+        try:
+            hits = await asyncio.wait_for(saavn_search(title, limit=1), timeout=25)
+            if hits and hits[0].get("direct_url"):
+                local = await asyncio.wait_for(
+                    download_saavn_file(hits[0]["direct_url"]), timeout=90)
+                if local:
+                    return local, "saavn"
+        except Exception as e:
+            logger.warning("Saavn fallback fail: %s", e)
+    raise RuntimeError("All download sources failed — .ytupdate karke retry karo")
+
+def download_youtube_file(query):
+    path = os.path.join(TEMP_DIR, f"yt_{uuid.uuid4().hex}.m4a")
+    opts = {
+        "format": "bestaudio/best", "outtmpl": path,
+        "quiet": True, "no_warnings": True, "noplaylist": True,
+        "extractor_retries": 2, "retries": 2, "socket_timeout": 20,
+        "nocheckcertificate": True,
+    }
+    if os.path.exists(COOKIES_FILE):
+        opts["cookiefile"] = COOKIES_FILE
+    else:
+        opts["extractor_args"] = {
+            "youtube": {"player_client": ["android", "android_vr", "tv_embedded", "web_embedded"]}
+        }
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        ydl.extract_info(query, download=True)
+    return path
+
+async def download_saavn_file(url):
+    path = os.path.join(TEMP_DIR, f"saavn_{uuid.uuid4().hex}.m4a")
+    timeout = aiohttp.ClientTimeout(total=180)
+    async with aiohttp.ClientSession(headers=SAAVN_HEADERS) as session:
+        async with session.get(url, timeout=timeout, allow_redirects=True) as resp:
+            if resp.status != 200:
+                raise RuntimeError(f"Saavn download HTTP {resp.status}")
+            with open(path, "wb") as f:
+                async for chunk in resp.content.iter_chunked(1024 * 256):
+                    f.write(chunk)
+    if not os.path.exists(path) or os.path.getsize(path) < 1024:
+        raise RuntimeError("Saavn download empty / too small")
+    return path
+
+def _is_temp_song(song):
+    return bool(song and song.get("temp"))
+
+def _delete_temp_song_files(song):
+    if not _is_temp_song(song):
+        return
+    for key in ("_file", "local_path"):
+        p = song.get(key)
+        if not p:
+            continue
+        try:
+            if os.path.exists(p):
+                os.remove(p)
+        except Exception:
+            pass
+
+async def _build_stream_for(song, q, seek=None):
+    src = song.get("source", "youtube")
+    normal = bool(song.get("normal"))
+    do_loop = bool(q.repeat)
+    speed = float(getattr(q, "speed", 1.0) or 1.0)
+    nightcore = bool(getattr(q, "nightcore", False))
+    bass = int(getattr(q, "bass", 0) or 0)
+    treble = int(getattr(q, "treble", 0) or 0)
+    loudspeaker_level = 0
+    if not normal:
+        if int(getattr(q, "loud_level", 0) or 0) > 0:
+            loudspeaker_level = int(q.loud_level)
+        elif int(getattr(q, "gain_level", 0) or 0) > 0:
+            loudspeaker_level = int(q.gain_level)
+        elif song.get("loudspeaker"):
+            loudspeaker_level = 100
+    boost_level = int(getattr(q, "boost_level", 0) or 0) if not normal else 0
+    eco_level = int(getattr(q, "eco_level", 0) or 0) if not normal else 0
+
+    existing = song.get("local_path") or song.get("_file")
+    if existing and os.path.exists(existing):
+        song["_file"] = existing
+        song["local_path"] = existing
+        return build_stream(existing, loop=do_loop, seek=seek, speed=speed, nightcore=nightcore,
+                            bass=bass, treble=treble, loudspeaker_level=loudspeaker_level,
+                            boost_level=boost_level, eco_level=eco_level)
+
+    if src in ("spotify", "deezer"):
+        rq = song.get("resolve_query") or f"{song.get('title', '')} {song.get('uploader', '')}"
+        local, via = await _fetch_youtube_audio(
+            f"ytsearch1:{rq}", song.get("title", ""), 0)
+        song["temp"] = not normal
+        song["_file"] = local
+        song["local_path"] = local
+        return build_stream(local, loop=do_loop, seek=seek, speed=speed, nightcore=nightcore,
+                            bass=bass, treble=treble, loudspeaker_level=loudspeaker_level,
+                            boost_level=boost_level, eco_level=eco_level)
+
+    if src == "soundcloud":
+        query = song.get("webpage_url") or song.get("direct_url")
+        if not query:
+            raise RuntimeError("SoundCloud URL missing")
+        local = await asyncio.wait_for(
+            asyncio.to_thread(download_youtube_file, query), timeout=120)
+        song["temp"] = not normal
+        song["_file"] = local
+        song["local_path"] = local
+        return build_stream(local, loop=do_loop, seek=seek, speed=speed, nightcore=nightcore,
+                            bass=bass, treble=treble, loudspeaker_level=loudspeaker_level,
+                            boost_level=boost_level, eco_level=eco_level)
+
+    if src == "saavn":
+        direct = song.get("direct_url")
+        enc = song.get("enc_url")
+        if enc:
+            fresh = await saavn_auth_url(enc)
+            if fresh:
+                direct = fresh
+                song["direct_url"] = fresh
+        if not direct:
+            raise RuntimeError("Saavn stream URL missing")
+        local = await asyncio.wait_for(download_saavn_file(direct), timeout=120)
+        song["temp"] = not normal
+        song["_file"] = local
+        song["local_path"] = local
+        return build_stream(local, loop=do_loop, seek=seek, speed=speed, nightcore=nightcore,
+                            bass=bass, treble=treble, loudspeaker_level=loudspeaker_level,
+                            boost_level=boost_level, eco_level=eco_level)
+
+    if src == "radio":
+        url = song.get("direct_url")
+        if not url:
+            raise RuntimeError("Radio stream URL missing")
+        return build_stream(url, loop=False, seek=seek, speed=speed, nightcore=nightcore,
+                            bass=bass, treble=treble, loudspeaker_level=loudspeaker_level,
+                            boost_level=boost_level, eco_level=eco_level)
+
+    query = song.get("webpage_url") or song.get("direct_url")
+    local, via = await _fetch_youtube_audio(query, song.get("title", ""), 0)
+    song["temp"] = not normal
+    song["_file"] = local
+    song["local_path"] = local
+    return build_stream(local, loop=do_loop, seek=seek, speed=speed, nightcore=nightcore,
+                        bass=bass, treble=treble, loudspeaker_level=loudspeaker_level,
+                        boost_level=boost_level, eco_level=eco_level)
+
+def _is_join_error(e):
+    s = str(e)
+    return ("GROUPCALL" in s.upper()) or ("JOINGROUPCALL" in s.upper()) or ("NOT_IN_CALL" in s.upper())
+
+async def play_song(chat_id, song, announce=True, silent=False, seek=None):
+    q = get_queue(chat_id)
+    if not vc_ready():
+        active_calls.discard(chat_id)
+        if not silent:
+            await _engine_down_reply_play(chat_id)
+        return False
+
+    st = None
+    if announce and not silent and not (song.get("local_path") and os.path.exists(song.get("local_path") or "")):
+        try:
+            st = await music.send_message(chat_id, f"⏳ 『{BRAND}』 — {stylish('Downloading audio')}…")
+        except Exception:
+            st = None
+
+    try:
+        song["chat_id"] = chat_id
+        stream = await _build_stream_for(song, q, seek=seek)
+        current_files[chat_id] = song.get("_file") or song.get("local_path")
+
+        last_err = None
+        for attempt in range(4):
+            try:
+                await vc.play(chat_id, stream)
+                last_err = None
+                break
+            except NoActiveGroupCall:
+                raise
+            except Exception as e:
+                last_err = e
+                if _is_join_error(e):
+                    logger.warning("Join error (attempt %d): %s", attempt + 1, e)
+                    try:
+                        await vc.leave_call(chat_id)
+                    except Exception:
+                        pass
+                    active_calls.discard(chat_id)
+                    await asyncio.sleep(3)
+                    continue
+                raise
+        if last_err is not None:
+            raise last_err
+
+        _reset_timer(chat_id, seek)
+
+        if _vol_auto.get(chat_id, True):
+            q.volume = AUTO_MAX_VOLUME
+        try:
+            await vc.change_volume_call(chat_id, q.volume)
+            _last_vol_applied[chat_id] = q.volume
+        except Exception:
+            pass
+        END_GUARD.pop(chat_id, None)
+        db.bump("total_played")
+        err_notified.discard(chat_id)
+        logger.info("Now playing: %s", song.get("title"))
+        if announce and not silent:
+            try:
+                np = now_playing_text(song)
+                kb = player_panel(q)
+                if st is not None:
+                    await st.edit_text(np, reply_markup=kb)
+                else:
+                    await music.send_message(chat_id, np, reply_markup=kb)
+            except Exception:
+                pass
+        return True
+    except NoActiveGroupCall:
+        active_calls.discard(chat_id)
+        current_files.pop(chat_id, None)
+        _delete_temp_song_files(song)
+        if st is not None:
+            try:
+                await st.delete()
+            except Exception:
+                pass
+        if not silent:
+            try:
+                await music.send_message(
+                    chat_id,
+                    f"❌ 『{BRAND}』 — {stylish('No active voice chat')}\n\n"
+                    "Start a **voice chat** in this group first.\n"
+                    "Make sure this account is **admin** in the group.\n\n"
+                    "👉 Then run `.play <song>` again.",
+                )
+            except Exception:
+                pass
+        return False
+    except Exception as e:
+        logger.error("Play error: %s", e)
+        active_calls.discard(chat_id)
+        current_files.pop(chat_id, None)
+        _delete_temp_song_files(song)
+        if st is not None:
+            try:
+                await st.delete()
+            except Exception:
+                pass
+        if not silent:
+            try:
+                await music.send_message(
+                    chat_id,
+                    f"❌ 『{BRAND}』 — {stylish('Playback failed')}\n"
+                    f"`{e}`\n\n"
+                    f"👉 Run `.diag` to check the problem.\n"
+                    f"💡 .ytupdate karke retry karo.\n",
+                )
+            except Exception:
+                pass
+        return False
+
+async def reapply_current_effects(chat_id):
+    q = get_queue(chat_id)
+    if not q.current:
+        return False
+    pos = max(0, int(get_elapsed(chat_id)))
+    dur = int(q.current.get("duration") or 0)
+    if pos and dur and pos >= dur:
+        if q.repeat or q.loop:
+            pos = pos % dur
+        else:
+            pos = 0
+    return await play_song(chat_id, q.current, announce=False, seek=pos)
+
+async def _engine_down_reply_play(chat_id):
+    try:
+        await music.send_message(
+            chat_id,
+            f"❌ 『{BRAND}』 — {stylish('Voice engine not running')}\n\n"
+            "Fix:\n"
+            "`pip install \"pyrogram==2.0.106\" \"py-tgcalls[pyrogram]==2.2.5\"`\n"
+            f"{stylish('then restart the bot.')}",
+        )
+    except Exception:
+        pass
+
+def now_playing_text(song):
+    icon = "🎙️" if song.get("local_path") else "🎵"
+    lines = [
+        f"▶️ 『{BRAND}』 — {stylish('Now Playing')}",
+        "━━━━━━━━━━━━━━━━━━━━━",
+        f"{icon} {song.get('title', 'Unknown')}",
+        f"⏱️ {fmt_duration(song.get('duration', 0))}",
+        f"👤 {song.get('uploader', 'DEV X CORE')}",
+    ]
+    if song.get("album"):
+        line = f"💿 {song.get('album')}"
+        if song.get("year"):
+            line += f" · 📅 {song.get('year')}"
+        lines.append(line)
+    if song.get("quality"):
+        lines.append(f"🔊 {song.get('quality')}")
+    if song.get("normal"):
+        lines.append(f"🎧 {stylish('natural sound — no effects')}")
+    return "\n".join(lines)
+
+async def on_stream_end(pytgcalls_client, update: StreamEnded):
+    if not vc_ready():
+        return
+    chat_id = update.chat_id
+    q = get_queue(chat_id)
+    if not q.current:
+        return
+    if q.repeat:
+        if chat_id in replay_lock:
+            return
+        path = q.current.get("local_path") or q.current.get("_file")
+        if path and not os.path.exists(path):
+            q.repeat = False
+            q.current = None
+            current_files.pop(chat_id, None)
+            active_calls.discard(chat_id)
+            PLAY_TIMERS.pop(chat_id, None)
+            if chat_id not in err_notified:
+                err_notified.add(chat_id)
+                try:
+                    await music.send_message(
+                        chat_id,
+                        f"❌ 『{BRAND}』 — {stylish('Loop stopped')}\n"
+                        f"{stylish('File is missing. Use .play again.')}",
+                    )
+                except Exception:
+                    pass
+            return
+        replay_lock.add(chat_id)
+        try:
+            _pos = max(0, int(get_elapsed(chat_id)))
+            ok = await play_song(chat_id, q.current, announce=False, silent=True, seek=_pos)
+            if not ok and chat_id not in err_notified:
+                err_notified.add(chat_id)
+                try:
+                    await music.send_message(
+                        chat_id,
+                        f"❌ 『{BRAND}』 — {stylish('Loop stopped')}\n"
+                        f"{stylish('Check voice chat, then .play again.')}",
+                    )
+                except Exception:
+                    pass
+                q.repeat = False
+                active_calls.discard(chat_id)
+                PLAY_TIMERS.pop(chat_id, None)
+        finally:
+            replay_lock.discard(chat_id)
+        return
+    _elapsed = get_elapsed(chat_id)
+    _dur = int(q.current.get("duration") or 0)
+    _natural = False
+    if _dur and _elapsed >= _dur - 3:
+        _natural = True
+    elif not _dur:
+        _now_t = time.time()
+        _g = END_GUARD.get(chat_id)
+        if _g and (_now_t - _g["ts"]) < 60:
+            _g["count"] += 1
+        else:
+            _g = {"count": 1, "ts": _now_t}
+        END_GUARD[chat_id] = _g
+        _natural = _g["count"] > 3
+    if not _natural:
+        _pos = max(0, int(_elapsed))
+        await play_song(chat_id, q.current, announce=False, silent=True, seek=_pos)
+        return
+    finished = q.current
+    requeued = False
+    if q.loop and q.current:
+        q.songs.append(q.current)
+        requeued = True
+    current_files.pop(chat_id, None)
+    q.current = None
+    if q.songs:
+        q.current = q.songs.popleft()
+        await play_song(chat_id, q.current, announce=not q.silent_loop)
+        if not requeued and finished is not None:
+            _delete_temp_song_files(finished)
+    else:
+        if finished is not None:
+            _delete_temp_song_files(finished)
+        active_calls.discard(chat_id)
+        PLAY_TIMERS.pop(chat_id, None)
+
+async def auto_enforce_loop():
+    while True:
+        await asyncio.sleep(ENFORCE_INTERVAL)
+        if not vc_ready():
+            continue
+        for chat_id in list(active_calls):
+            q = get_queue(chat_id)
+            if AUTO_UNMUTE and not _muted_state.get(chat_id):
+                try:
+                    await vc.unmute(chat_id)
+                except Exception:
+                    pass
+            if _last_vol_applied.get(chat_id) != q.volume:
+                try:
+                    await vc.change_volume_call(chat_id, q.volume)
+                    _last_vol_applied[chat_id] = q.volume
+                except Exception:
+                    pass
 
 # ==================== CLIENTS ====================
-# Music userbot (in_memory: no .session file; session string set on login)
 music = Client(
     SESSION_NAME,
     api_id=API_ID,
@@ -2114,7 +1579,6 @@ music = Client(
     in_memory=True,
 )
 
-# Token bot (login helper)
 bot = Client(
     "login_helper_bot",
     api_id=API_ID,
@@ -2123,30 +1587,25 @@ bot = Client(
     in_memory=True,
 )
 
-vc = None            # PyTgCalls (created on music start)
+vc = None
 music_started = False
-login_state = {}     # user_id -> login step data
+login_state = {}
 
-# [FIX] ---------- VOICE-ENGINE GUARDS ----------
 def vc_ready():
-    """True only when PyTgCalls exists AND started."""
     return vc is not None and music_started
 
 async def _engine_down_reply(message):
     try:
         await message.reply_text(
             f"❌ 『{BRAND}』 — {stylish('Voice engine not running')}\n\n"
-            f"{stylish('PyTgCalls failed to start (see server logs).')}\n\n"
-            f"🔧 {stylish('Fix the version mismatch')}:\n"
+            f"🔧 Fix:\n"
             "`pip install \"pyrogram==2.0.106\" \"py-tgcalls[pyrogram]==2.2.5\"`\n"
-            f"{stylish('then restart the bot.')}\n\n"
-            f"👉 {stylish('Check')} /status {stylish('on the login bot')} · `.diag` {stylish('here')}."
+            f"{stylish('then restart the bot.')}",
         )
     except Exception:
         pass
 
 def needs_vc(func):
-    """Guard music handlers: friendly message instead of NoneType crash."""
     @functools.wraps(func)
     async def wrapper(client, message, *args, **kwargs):
         if not vc_ready():
@@ -2154,7 +1613,6 @@ def needs_vc(func):
             return
         return await func(client, message, *args, **kwargs)
     return wrapper
-# ------------------------------------------------
 
 # ==================== KEYBOARDS ====================
 def player_panel(q=None):
@@ -2179,7 +1637,6 @@ def player_panel(q=None):
         [InlineKeyboardButton("🔊 Sound", callback_data="cb_sound"),
          InlineKeyboardButton("Queue", callback_data="cb_queue"),
          InlineKeyboardButton("Now", callback_data="cb_now")],
-        [InlineKeyboardButton("Vault", callback_data="cb_files")],
         [InlineKeyboardButton("⌂  Hub", callback_data="cb_menu")],
     ])
 
@@ -2204,12 +1661,7 @@ def owner_panel():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("Stats", callback_data="cb_stats"),
          InlineKeyboardButton("Users", callback_data="cb_users")],
-        [InlineKeyboardButton("Servers", callback_data="cb_servers"),
-         InlineKeyboardButton("Broadcast", callback_data="cb_broadcast")],
-        [InlineKeyboardButton("Vault", callback_data="cb_files"),
-         InlineKeyboardButton("Wipe files", callback_data="cb_delall")],
-        [InlineKeyboardButton("Lock", callback_data="cb_lock"),
-         InlineKeyboardButton("Unlock", callback_data="cb_unlock")],
+        [InlineKeyboardButton("Broadcast", callback_data="cb_broadcast")],
         [InlineKeyboardButton("👑 Add Admin", callback_data="cb_addadmin"),
          InlineKeyboardButton("🗑️ Del Admin", callback_data="cb_deladmin")],
         [InlineKeyboardButton("📋 Admin List", callback_data="cb_adminlist")],
@@ -2246,689 +1698,15 @@ def queue_panel(q, page=0, per_page=5):
     rows.append([InlineKeyboardButton("🎛️ Panel", callback_data="cb_panel")])
     return text, InlineKeyboardMarkup(rows)
 
-BANNER = None  # built live so uptime stays fresh
-
-def get_banner():
-    return hub_home_text()
-
-# ==================== CORE PLAY ====================
-async def download_saavn_file(url):
-    """Download a Saavn stream (AAC/MP4) to a local file."""
-    path = os.path.join(TEMP_DIR, f"saavn_{uuid.uuid4().hex}.m4a")
-    timeout = aiohttp.ClientTimeout(total=180)
-    async with aiohttp.ClientSession(headers=SAAVN_HEADERS) as session:
-        async with session.get(url, timeout=timeout, allow_redirects=True) as resp:
-            if resp.status != 200:
-                raise RuntimeError(f"Saavn download HTTP {resp.status}")
-            with open(path, "wb") as f:
-                async for chunk in resp.content.iter_chunked(1024 * 256):
-                    f.write(chunk)
-    if not os.path.exists(path) or os.path.getsize(path) < 1024:
-        raise RuntimeError("Saavn download empty / too small")
-    return path
-
-def download_youtube_file(query):
-    """Download YouTube bestaudio to a temp file (most reliable playback)."""
-    path = os.path.join(TEMP_DIR, f"yt_{uuid.uuid4().hex}.m4a")
-    opts = {
-        "format": "bestaudio/best",
-        "outtmpl": path,
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "extractor_retries": 2,
-        "retries": 2,
-        "socket_timeout": 20,
-        "nocheckcertificate": True,
-    }
-    if os.path.exists(COOKIES_FILE):
-        opts["cookiefile"] = COOKIES_FILE
-    else:
-        opts["extractor_args"] = {
-            "youtube": {"player_client": ["android", "android_vr", "tv_embedded", "web_embedded"]}
-        }
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        ydl.extract_info(query, download=True)
-    return path
-
-# ==================== 1000% PLAY FALLBACK ENGINE ====================
-# yt-dlp fail / hang ho jaye to bhi song PLAY hoga:
-#   Tier 1: yt-dlp download (cookies best)
-#   Tier 2: Invidious (public YouTube mirrors) se direct stream
-#   Tier 3: JioSaavn title search (direct CDN, yt-dlp ki zaroorat hi nahi)
-
-YT_ID_RE = re.compile(r"(?:v=|youtu\.be/|/shorts/|/embed/|/live/|/v/)([A-Za-z0-9_-]{11})")
-
-def extract_youtube_id(query):
-    m = YT_ID_RE.search(query or "")
-    return m.group(1) if m else None
-
-INVIDIOUS_INSTANCES = [
-    "https://inv.nadeko.net",
-    "https://invidious.nerdvpn.de",
-    "https://yewtu.be",
-    "https://invidious.f5.si",
-]
-
-async def invidious_stream_url(video_id):
-    """Public Invidious instances se direct audio stream URL."""
-    if not video_id:
-        return None
-    for base in INVIDIOUS_INSTANCES:
-        try:
-            timeout = aiohttp.ClientTimeout(total=15)
-            async with aiohttp.ClientSession() as s:
-                async with s.get(f"{base}/api/v1/videos/{video_id}", timeout=timeout) as r:
-                    data = await r.json(content_type=None)
-            fmts = (data or {}).get("adaptiveFormats") or (data or {}).get("formatStreams") or []
-            best = None
-            for f in fmts:
-                if not isinstance(f, dict):
-                    continue
-                if "audio" in (f.get("type") or ""):
-                    if best is None or int(f.get("bitrate") or 0) > int(best.get("bitrate") or 0):
-                        best = f
-            if best and best.get("url"):
-                logger.info("Invidious hit: %s (%s)", base, best.get("type"))
-                return best["url"]
-        except Exception as e:
-            logger.warning("Invidious %s fail: %s", base, e)
-            continue
-    return None
-
-async def download_http_audio(url):
-    """Direct URL se audio download (Invidious stream)."""
-    path = os.path.join(TEMP_DIR, f"inv_{uuid.uuid4().hex}.m4a")
-    timeout = aiohttp.ClientTimeout(total=120)
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, timeout=timeout) as resp:
-            if resp.status != 200:
-                raise RuntimeError(f"HTTP {resp.status}")
-            with open(path, "wb") as f:
-                async for chunk in resp.content.iter_chunked(1024 * 256):
-                    f.write(chunk)
-    if not os.path.exists(path) or os.path.getsize(path) < 1024:
-        raise RuntimeError("download empty")
-    return path
-
-async def _search_guard(coro, seconds=15):
-    """Search call ko timeout me wrap karo — kabhi hang nahi hoga."""
-    try:
-        return await asyncio.wait_for(coro, timeout=seconds)
-    except Exception as e:
-        logger.warning("search guarded (%ss): %s", seconds, e)
-        return []
-
-async def _fetch_youtube_audio(query, title, chat_id, video=False, max_wait=100):
-    """1000% PLAY: yt-dlp → Invidious → Saavn. Koi ek na koi chalega hi.
-    Returns (path, source_label)."""
-    # ---- Tier 1: yt-dlp ----
-    try:
-        if video:
-            local = await asyncio.wait_for(
-                asyncio.to_thread(download_youtube_video, query), timeout=max_wait)
-        else:
-            local = await asyncio.wait_for(
-                asyncio.to_thread(download_youtube_file, query), timeout=max_wait)
-        if local and os.path.exists(local) and os.path.getsize(local) > 1024:
-            return local, "youtube"
-    except Exception as e:
-        logger.warning("yt-dlp download fail (%s) -> fallback chain", e)
-
-    if not video:
-        # ---- Tier 2: Invidious ----
-        vid = extract_youtube_id(query)
-        if vid:
-            try:
-                url = await asyncio.wait_for(invidious_stream_url(vid), timeout=40)
-                if url:
-                    local = await asyncio.wait_for(download_http_audio(url), timeout=90)
-                    if local:
-                        return local, "invidious"
-            except Exception as e:
-                logger.warning("Invidious fallback fail: %s", e)
-
-        # ---- Tier 3: JioSaavn title search (direct CDN, no yt-dlp) ----
-        if title:
-            try:
-                hits = await asyncio.wait_for(saavn_search(title, limit=1), timeout=25)
-                if hits and hits[0].get("direct_url"):
-                    local = await asyncio.wait_for(
-                        download_saavn_file(hits[0]["direct_url"]), timeout=90)
-                    if local:
-                        return local, "saavn"
-            except Exception as e:
-                logger.warning("Saavn fallback fail: %s", e)
-    raise RuntimeError("All download sources failed — .ytupdate karke retry karo")
-
-def download_youtube_video(query):
-    """Download YouTube video (max 720p) so .vrun can loop a local file."""
-    uid = uuid.uuid4().hex
-    outtmpl = os.path.join(TEMP_DIR, f"ytv_{uid}.%(ext)s")
-    opts = {
-        "format": "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
-        "outtmpl": outtmpl,
-        "merge_output_format": "mp4",
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "extractor_retries": 2,
-        "retries": 2,
-        "socket_timeout": 20,
-        "nocheckcertificate": True,
-    }
-    if os.path.exists(COOKIES_FILE):
-        opts["cookiefile"] = COOKIES_FILE
-    else:
-        opts["extractor_args"] = {
-            "youtube": {"player_client": ["android", "android_vr", "tv_embedded", "web_embedded"]}
-        }
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(query, download=True)
-        path = ydl.prepare_filename(info)
-    if path and os.path.exists(path):
-        return path
-    base = os.path.join(TEMP_DIR, f"ytv_{uid}")
-    for ext in (".mp4", ".mkv", ".webm", ".m4a"):
-        cand = base + ext
-        if os.path.exists(cand):
-            return cand
-    raise RuntimeError("YouTube video download produced no file")
-
-async def _build_stream_for(song, q, seek=None):
-    """Build the correct stream object for a song dict (no join).
-
-    Reuses an already-downloaded file so .run / .vrun / .repeat never
-    re-download or lose the file. When q.repeat is on, ffmpeg loops it
-    with -stream_loop -1 (file stays, no StreamEnded spam).
-    """
-    src = song.get("source", "youtube")
-    # .nplay -> normal: koi extra gain / boost / echo nahi, natural sound
-    normal = bool(song.get("normal"))
-    do_loop = bool(q.repeat)
-    chat_id = song.get("chat_id") or 0
-    # ⚡ SUPER audio state — SAB 0-100 LEVEL CONTROL
-    speed = float(getattr(q, "speed", 1.0) or 1.0)
-    nightcore = bool(getattr(q, "nightcore", False))
-    bass = int(getattr(q, "bass", 0) or 0)
-    treble = int(getattr(q, "treble", 0) or 0)
-    # loudspeaker level: .loud > .gain > saved-file flag
-    loudspeaker_level = 0
-    if not normal:
-        if int(getattr(q, "loud_level", 0) or 0) > 0:
-            loudspeaker_level = int(q.loud_level)
-        elif int(getattr(q, "gain_level", 0) or 0) > 0:
-            loudspeaker_level = int(q.gain_level)
-        elif song.get("loudspeaker"):
-            loudspeaker_level = 100
-    boost_level = int(getattr(q, "boost_level", 0) or 0) if not normal else 0
-    eco_level = int(getattr(q, "eco_level", 0) or 0) if not normal else 0
-
-    # Reuse a file we already have — never re-download on loop restart
-    existing = song.get("local_path") or song.get("_file")
-    if existing and os.path.exists(existing):
-        song["_file"] = existing
-        song["local_path"] = existing
-        # temp (streamed) songs vault me store nahi hote
-        if not song.get("temp"):
-            register_saved_file(existing, song.get("title"), song.get("source", "local"), chat_id)
-        if song.get("video"):
-            return build_video_stream(existing, loop=do_loop, seek=seek, speed=speed, nightcore=nightcore,
-                            bass=bass, treble=treble, loudspeaker_level=loudspeaker_level, boost_level=boost_level, eco_level=eco_level)
-        return build_stream(existing, loop=do_loop, seek=seek, speed=speed, nightcore=nightcore,
-                            bass=bass, treble=treble, loudspeaker_level=loudspeaker_level, boost_level=boost_level, eco_level=eco_level)
-
-    # Remote source -> DOWNLOAD to local file first (1000% fallback engine).
-    # Ye streamed songs TEMP hote hain — vault me store nahi, auto-delete.
-    if src in ("spotify", "deezer"):
-        # 🟢🔴 metadata sources: YouTube se matching audio resolve hota hai
-        # (yt-dlp fail -> Invidious -> Saavn title search)
-        rq = song.get("resolve_query") or f"{song.get('title', '')} {song.get('uploader', '')}"
-        local, via = await _fetch_youtube_audio(
-            f"ytsearch1:{rq}", song.get("title", ""), chat_id)
-        # [FIX] .nplay (natural) songs SAVED hote hain vault me,
-        # sirf .play wale streamed songs temp (auto-delete) hote hain
-        if normal:
-            register_saved_file(local, song.get("title"), src, chat_id)
-        else:
-            song["temp"] = True
-        song["_file"] = local
-        song["local_path"] = local
-        return build_stream(local, loop=do_loop, seek=seek, speed=speed, nightcore=nightcore,
-                            bass=bass, treble=treble, loudspeaker_level=loudspeaker_level, boost_level=boost_level, eco_level=eco_level)
-
-    if src == "soundcloud":
-        # 🟠 SoundCloud: yt-dlp se full track download (timeout-guarded)
-        query = song.get("webpage_url") or song.get("direct_url")
-        if not query:
-            raise RuntimeError("SoundCloud URL missing")
-        local = await asyncio.wait_for(
-            asyncio.to_thread(download_youtube_file, query), timeout=120)
-        # [FIX] .nplay (natural) songs SAVED hote hain vault me,
-        # sirf .play wale streamed songs temp (auto-delete) hote hain
-        if normal:
-            register_saved_file(local, song.get("title"), src, chat_id)
-        else:
-            song["temp"] = True
-        song["_file"] = local
-        song["local_path"] = local
-        return build_stream(local, loop=do_loop, seek=seek, speed=speed, nightcore=nightcore,
-                            bass=bass, treble=treble, loudspeaker_level=loudspeaker_level, boost_level=boost_level, eco_level=eco_level)
-
-    if src == "saavn":
-        direct = song.get("direct_url")
-        enc = song.get("enc_url")
-        if enc:
-            fresh = await saavn_auth_url(enc)
-            if fresh:
-                direct = fresh
-                song["direct_url"] = fresh
-        if not direct:
-            raise RuntimeError("Saavn stream URL missing")
-        local = await asyncio.wait_for(download_saavn_file(direct), timeout=120)
-        # [FIX] .nplay (natural) songs SAVED hote hain vault me,
-        # sirf .play wale streamed songs temp (auto-delete) hote hain
-        if normal:
-            register_saved_file(local, song.get("title"), src, chat_id)
-        else:
-            song["temp"] = True
-        song["_file"] = local
-        song["local_path"] = local
-        return build_stream(local, loop=do_loop, seek=seek, speed=speed, nightcore=nightcore,
-                            bass=bass, treble=treble, loudspeaker_level=loudspeaker_level, boost_level=boost_level, eco_level=eco_level)
-
-    if src == "radio":
-        # 📻 live radio — direct URL pe stream (download nahi, gapless)
-        url = song.get("direct_url")
-        if not url:
-            raise RuntimeError("Radio stream URL missing")
-        return build_stream(url, loop=False, seek=seek, speed=speed, nightcore=nightcore,
-                            bass=bass, treble=treble, loudspeaker_level=loudspeaker_level,
-                            boost_level=boost_level, eco_level=eco_level)
-
-    # youtube — 1000% play: yt-dlp → Invidious → Saavn fallback chain
-    query = song.get("webpage_url") or song.get("direct_url")
-    if song.get("video"):
-        # download once so loop / repeat can replay the same file
-        local = await asyncio.wait_for(
-            asyncio.to_thread(download_youtube_video, query), timeout=150)
-        # [FIX] .nplay (natural) songs SAVED hote hain vault me,
-        # sirf .play wale streamed songs temp (auto-delete) hote hain
-        if normal:
-            register_saved_file(local, song.get("title"), src, chat_id)
-        else:
-            song["temp"] = True
-        song["_file"] = local
-        song["local_path"] = local
-        return build_video_stream(local, loop=do_loop, seek=seek, speed=speed, nightcore=nightcore,
-                            bass=bass, treble=treble, loudspeaker_level=loudspeaker_level, boost_level=boost_level, eco_level=eco_level)
-    local, via = await _fetch_youtube_audio(query, song.get("title", ""), chat_id)
-    # [FIX] .nplay (natural) songs SAVED hote hain, sirf .play wale temp
-    if normal:
-        register_saved_file(local, song.get("title"), "youtube", chat_id)
-    else:
-        song["temp"] = True
-    song["_file"] = local
-    song["local_path"] = local
-    return build_stream(local, loop=do_loop, seek=seek, speed=speed, nightcore=nightcore,
-                            bass=bass, treble=treble, loudspeaker_level=loudspeaker_level, boost_level=boost_level, eco_level=eco_level)
-
-def _is_join_error(e):
-    s = str(e)
-    return ("GROUPCALL" in s.upper()) or ("JOINGROUPCALL" in s.upper()) or ("NOT_IN_CALL" in s.upper())
-
-async def play_song(chat_id, song, announce=True, silent=False, seek=None):
-    """Play a song. Returns True on success.
-
-    announce=False  → don't send 'Now Playing'
-    silent=True     → don't send ANY chat message (used for loop restart)
-    seek=<seconds>  → gaana us position se chalta hai (effect toggle, no restart)
-    """
-    q = get_queue(chat_id)
-
-    # [FIX] guard: never touch vc when the engine didn't start.
-    if not vc_ready():
-        active_calls.discard(chat_id)
-        if not silent:
-            await _engine_down_reply_play(chat_id)
-        return False
-
-    # ⏳ download status (sirf jab announce karna ho) — yt-dlp slow hone pe
-    # bhi user ko pata rahe ki bot kaam kar raha hai
-    st = None
-    if announce and not silent and not (song.get("local_path") and os.path.exists(song.get("local_path") or "")):
-        try:
-            st = await music.send_message(chat_id, f"⏳ 『{BRAND}』 — {stylish('Downloading audio')}…")
-        except Exception:
-            st = None
-
-    try:
-        # Files are kept on disk — no auto-delete. Track the current path only.
-        song["chat_id"] = chat_id
-        stream = await _build_stream_for(song, q, seek=seek)
-        current_files[chat_id] = song.get("_file") or song.get("local_path")
-
-        # Join + play with retry (GROUPCALL_INVALID is usually a stale-call
-        # issue: fully leave + rejoin with a short delay fixes it).
-        last_err = None
-        for attempt in range(4):
-            try:
-                await vc.play(chat_id, stream)
-                last_err = None
-                break
-            except NoActiveGroupCall:
-                raise
-            except Exception as e:
-                last_err = e
-                if _is_join_error(e):
-                    logger.warning("Join error (attempt %d): %s", attempt + 1, e)
-                    # fully reset the call state
-                    try:
-                        await vc.leave_call(chat_id)
-                    except Exception:
-                        pass
-                    active_calls.discard(chat_id)
-                    await asyncio.sleep(3)
-                    continue
-                raise
-        if last_err is not None:
-            raise last_err
-
-        # position tracking: seek diya hai to timer wahi se chalta hai
-        _reset_timer(chat_id, seek)
-
-        # 🔊 AUTO-HIGH VOLUME: jab tak user ne khud volume set nahi kiya,
-        # har naye play (.play/.run/.vrun/.radio) pe volume automatic highest (200) rhega.
-        if _vol_auto.get(chat_id, True):
-            q.volume = AUTO_MAX_VOLUME
-        try:
-            await vc.change_volume_call(chat_id, q.volume)
-            _last_vol_applied[chat_id] = q.volume
-        except Exception:
-            pass
-        END_GUARD.pop(chat_id, None)   # naya song -> end-guard reset
-        db.bump("total_played")
-        err_notified.discard(chat_id)
-        logger.info("Now playing: %s", song.get("title"))
-        if announce and not silent:
-            try:
-                np = now_playing_text(song)
-                kb = player_panel(q)
-                if st is not None:
-                    await st.edit_text(np, reply_markup=kb)
-                else:
-                    await music.send_message(chat_id, np, reply_markup=kb)
-            except Exception:
-                pass
-        return True
-    except NoActiveGroupCall:
-        active_calls.discard(chat_id)
-        current_files.pop(chat_id, None)
-        # temp (streamed) song download ho chuka tha par play nahi hua -> delete
-        _delete_temp_song_files(song)
-        if st is not None:
-            try:
-                await st.delete()
-            except Exception:
-                pass
-        if not silent:
-            try:
-                await music.send_message(
-                    chat_id,
-                    f"❌ 『{BRAND}』 — {stylish('No active voice chat')}\n\n"
-                    "Start a **voice chat** in this group first.\n"
-                    "Also make sure this account is an **admin** in the group,\n"
-                    "so it can auto-join the voice chat.\n\n"
-                    "👉 Then run `.play <song>` again.",
-                )
-            except Exception:
-                pass
-        return False
-    except Exception as e:
-        logger.error("Play error: %s", e)
-        active_calls.discard(chat_id)
-        current_files.pop(chat_id, None)
-        # temp (streamed) song download ho chuka tha par play nahi hua -> delete
-        _delete_temp_song_files(song)
-        if st is not None:
-            try:
-                await st.delete()
-            except Exception:
-                pass
-        if not silent:
-            try:
-                await music.send_message(
-                    chat_id,
-                    f"❌ 『{BRAND}』 — {stylish('Playback failed')}\n"
-                    f"`{e}`\n\n"
-                    f"👉 Run `.diag` to check the problem.\n"
-                    f"💡 {stylish('Tip: .ytupdate karke retry karo (yt-dlp old version sabse common cause hai)')}.\n"
-                    f"💡 {stylish('Ya restart the voice chat, then retry')}.",
-                )
-            except Exception:
-                pass
-        return False
-
-async def reapply_current_effects(chat_id):
-    """🎛️ Chalte hue gaane pe effects apply karo — gaana RESTART NAHI hota,
-    wahi position se resume hota hai (ffmpeg -ss seek). .boost/.eco/.gain/
-    .mix/.loud/.repeat sab isi se live apply hote hain."""
-    q = get_queue(chat_id)
-    if not q.current:
-        return False
-    pos = max(0, int(get_elapsed(chat_id)))
-    dur = int(q.current.get("duration") or 0)
-    if pos and dur and pos >= dur:
-        if q.repeat or q.loop:
-            pos = pos % dur
-        else:
-            pos = 0
-    return await play_song(chat_id, q.current, announce=False, seek=pos)
-
-async def _engine_down_reply_play(chat_id):
-    """Friendly chat message when .play is used but PyTgCalls never started."""
-    try:
-        await music.send_message(
-            chat_id,
-            f"❌ 『{BRAND}』 — {stylish('Voice engine not running')}\n\n"
-            f"{stylish('PyTgCalls failed to start. Version mismatch?')}\n"
-            "Fix:\n"
-            "`pip install \"pyrogram==2.0.106\" \"py-tgcalls[pyrogram]==2.2.5\"`\n"
-            f"{stylish('then restart the bot.')}\n\n"
-            f"👉 /status {stylish('on the login bot')} · `.diag` {stylish('here')}",
-        )
-    except Exception:
-        pass
-
-def now_playing_text(song):
-    icon = "🎬" if song.get("video") else ("🎙️" if song.get("local_path") else "🎵")
-    lines = [
-        f"▶️ 『{BRAND}』 — {stylish('Now Playing')}",
-        "━━━━━━━━━━━━━━━━━━━━━",
-        f"{icon} {song.get('title', 'Unknown')}",
-        f"⏱️ {fmt_duration(song.get('duration', 0))}",
-        f"👤 {song.get('uploader', 'DEV X CORE')}",
-    ]
-    if song.get("album"):
-        line = f"💿 {song.get('album')}"
-        if song.get("year"):
-            line += f" · 📅 {song.get('year')}"
-        lines.append(line)
-    if song.get("quality"):
-        lines.append(f"🔊 {song.get('quality')}")
-    if song.get("normal"):
-        lines.append(f"🎧 {stylish('natural sound — no effects')}")
-    return "\n".join(lines)
-
-async def on_stream_end(pytgcalls_client, update: StreamEnded):
-    # [FIX] engine may be gone (stop / restart) — never crash here
-    if not vc_ready():
-        return
-    chat_id = update.chat_id
-    q = get_queue(chat_id)
-    if not q.current:
-        return
-    if q.repeat:
-        # ffmpeg -stream_loop should prevent this; if it still fires, replay
-        # SILENTLY (same position se) — never restart from beginning, never delete file.
-        if chat_id in replay_lock:
-            return
-        path = q.current.get("local_path") or q.current.get("_file")
-        if path and not os.path.exists(path):
-            q.repeat = False
-            q.current = None
-            current_files.pop(chat_id, None)
-            active_calls.discard(chat_id)
-            PLAY_TIMERS.pop(chat_id, None)
-            if chat_id not in err_notified:
-                err_notified.add(chat_id)
-                try:
-                    await music.send_message(
-                        chat_id,
-                        f"❌ 『{BRAND}』 — {stylish('Loop stopped')}\n"
-                        f"{stylish('Saved file is missing. Use .run / .vrun again.')}",
-                    )
-                except Exception:
-                    pass
-            return
-        replay_lock.add(chat_id)
-        try:
-            _pos = max(0, int(get_elapsed(chat_id)))
-            ok = await play_song(chat_id, q.current, announce=False, silent=True, seek=_pos)
-            if not ok and chat_id not in err_notified:
-                err_notified.add(chat_id)
-                try:
-                    await music.send_message(
-                        chat_id,
-                        f"❌ 『{BRAND}』 — {stylish('Loop stopped')}\n"
-                        f"{stylish('Could not restart. Check voice chat, then .run again.')}",
-                    )
-                except Exception:
-                    pass
-                q.repeat = False
-                active_calls.discard(chat_id)
-                PLAY_TIMERS.pop(chat_id, None)
-        finally:
-            replay_lock.discard(chat_id)
-        return
-    # ✅ UNEXPECTED-END GUARD: agar track NATURALLY khatam nahi hua
-    # (koi join/leave/event StreamEnded bhej de), to WAHI position se
-    # silent restart — loop/play kabhi disturb nahi hota, shuru se NAHI.
-    _elapsed = get_elapsed(chat_id)
-    _dur = int(q.current.get("duration") or 0)
-    _natural = False
-    if _dur and _elapsed >= _dur - 3:
-        _natural = True                 # naturally khatam hua
-    elif not _dur:
-        # ⏳ duration unknown (local/radio/reply files) — guard: sirf 3 baar
-        # same-pos restart in 60s, warna stuck maan kar advance/stop karo.
-        _now_t = time.time()
-        _g = END_GUARD.get(chat_id)
-        if _g and (_now_t - _g["ts"]) < 60:
-            _g["count"] += 1
-        else:
-            _g = {"count": 1, "ts": _now_t}
-        END_GUARD[chat_id] = _g
-        _natural = _g["count"] > 3
-    if not _natural:
-        _pos = max(0, int(_elapsed))
-        await play_song(chat_id, q.current, announce=False, silent=True, seek=_pos)
-        return
-    # [FIX] jis song ka repeat hua (repeat branch return karta hai) —
-    # us case me file in use hai, delete mat karo. Ye rest path ke liye hai:
-    finished = q.current
-    requeued = False
-    if q.loop and q.current:
-        q.songs.append(q.current)
-        requeued = True
-    # only drop the "now playing" pointer
-    current_files.pop(chat_id, None)
-    q.current = None
-    if q.songs:
-        q.current = q.songs.popleft()
-        # 🔁 spam-free: loop/silent_loop me har cycle announce NAHI hota
-        await play_song(chat_id, q.current, announce=not q.silent_loop)
-        # temp (streamed) song khatam -> file auto-delete (agar re-queue nahi hua)
-        if not requeued and finished is not None:
-            _delete_temp_song_files(finished)
-    else:
-        # temp (streamed) song khatam -> file auto-delete
-        if finished is not None:
-            _delete_temp_song_files(finished)
-        active_calls.discard(chat_id)
-        PLAY_TIMERS.pop(chat_id, None)
-
-async def auto_enforce_loop():
-    """🛡️ STABILITY: kabhi bhi har-tick pe volume/mute CALL NAHI —
-    py-tgcalls me repeated change_volume_call/unmute = stream RESTART.
-    Volume sirf tab apply hota hai jab user ne change kiya (tracked)."""
-    while True:
-        await asyncio.sleep(ENFORCE_INTERVAL)
-        # [FIX] skip while the engine is down
-        if not vc_ready():
-            continue
-        for chat_id in list(active_calls):
-            q = get_queue(chat_id)
-            # 🔊 AUTO-UNMUTE: har tick check — agar bot ko kisi ne mute kiya to
-            # wapas unmute. User ne PANEL se khud mute kiya ho to respect (skip).
-            if AUTO_UNMUTE and not _muted_state.get(chat_id):
-                try:
-                    await vc.unmute(chat_id)
-                except Exception:
-                    pass
-            # volume sirf tab jab actually badla ho — spam nahi, restart nahi
-            if _last_vol_applied.get(chat_id) != q.volume:
-                try:
-                    await vc.change_volume_call(chat_id, q.volume)
-                    _last_vol_applied[chat_id] = q.volume
-                except Exception:
-                    pass
-
-# ==================== DOWNLOAD REPLY MEDIA ====================
-async def download_reply_media(message: Message):
-    r = message.reply_to_message
-    if r is None:
-        return None
-    media = None
-    ext = "bin"
-    title = None
-    if r.audio:
-        media, ext = r.audio, (r.audio.file_name or "audio.mp3").rsplit(".", 1)[-1]
-        title = getattr(r.audio, "title", None) or r.audio.file_name
-    elif r.voice:
-        media, ext = r.voice, "ogg"
-        title = "voice_note.ogg"
-    elif r.video:
-        media, ext = r.video, (r.video.file_name or "video.mp4").rsplit(".", 1)[-1]
-        title = r.video.file_name or "video.mp4"
-    elif r.video_note:
-        media, ext = r.video_note, "mp4"
-        title = "video_note.mp4"
-    elif r.document and (r.document.mime_type or "").startswith(("audio/", "video/")):
-        media, ext = r.document, (r.document.file_name or "doc.bin").rsplit(".", 1)[-1]
-        title = r.document.file_name
-    else:
-        return None
-    path = os.path.join(TEMP_DIR, f"{message.chat.id}_{message.id}.{ext}")
-    try:
-        await r.download(file_name=path)
-        register_saved_file(path, title or os.path.basename(path), "local", message.chat.id)
-        return path
-    except Exception as e:
-        logger.error("Download error: %s", e)
-        return None
-
 # ==================== MUSIC COMMAND HANDLERS ====================
 @music.on_message(filters.command("join", prefixes=PREFIX))
 @needs_vc
 async def join_cmd(client, message):
-    """Manually join the voice chat (helps when auto-join fails)."""
     chat_id = message.chat.id
     if not await can_control(client, chat_id, message.from_user.id):
         await _deny_reply(message)
         return
     try:
-        # join without audio (empty stream)
         await vc.play(chat_id)
         active_calls.add(chat_id)
         await message.reply_text(f"✅ 『{BRAND}』 — {stylish('Joined voice chat!')}\n\nNow run `.play <song>`.")
@@ -2942,39 +1720,24 @@ async def join_cmd(client, message):
 
 @music.on_message(filters.command("diag", prefixes=PREFIX))
 async def diag_cmd(client, message):
-    """Diagnose why music is not playing."""
     import shutil
     chat_id = message.chat.id
     q = get_queue(chat_id)
-
-    # 1. ffmpeg check
     ffmpeg_ok = shutil.which("ffmpeg") is not None
     ffprobe_ok = shutil.which("ffprobe") is not None
-
-    # 2. music bot running?
-    # 3. active voice call in this chat?
     in_call = chat_id in active_calls
-
-    # 4. current song?
     cur = q.current
-
-    # 5. is bot admin here?
     admin_ok = await is_group_admin(client, chat_id, client.me.id if hasattr(client, 'me') else OWNER_ID)
-
-    # [FIX] 6. pytgcalls version + compat
     try:
         from importlib.metadata import version as _dist_version
         pt_version = _dist_version("py-tgcalls")
     except Exception:
         pt_version = "?"
     compat_ok, compat_msg = check_engine_compat()
-
-    # [FIX] 7. yt-dlp version (purana = YouTube problems)
     try:
         yt_version = yt_dlp.version.__version__
     except Exception:
         yt_version = "?"
-
     lines = [
         f"🩺 『{BRAND}』 — {stylish('Diagnostic')}",
         "━━━━━━━━━━━━━━━━━━━━━",
@@ -2992,121 +1755,18 @@ async def diag_cmd(client, message):
     lines.append(f"💡 {stylish('yt-dlp purana ho to')}: `.ytupdate` ({stylish('owner')})")
     lines.append(f"💡 {stylish('Download fail? Bot khud fallback leta hai')}: yt-dlp → Invidious → Saavn")
     if not compat_ok:
-        lines.append(f"💊 {stylish('Fix')}: `pip install \"pyrogram==2.0.106\" \"py-tgcalls[pyrogram]==2.2.5\"`")
-        lines.append(f"💊 {stylish('then restart the bot.')}")
+        lines.append(f"💊 {stylish('Fix')}: `pip install \"pyrogram==2.0.106\" \"py-tgcalls[pyrogram]==2.2.5\"` then restart.")
     await message.reply_text("\n".join(lines))
 
 @music.on_message(filters.command("start", prefixes=PREFIX) & filters.private)
 async def start_cmd(client, message):
     u = message.from_user
     db.add_user(u.id, u.username, u.first_name, u.last_name or "")
-    await send_with_banner(
-        message,
-        hub_home_text(f"  {stylish('welcome')}, **{u.first_name}**.\n  {stylish('add me to a group + start vc.')}"),
-        hub_keyboard(),
-    )
-
-CMD_HELP = {
-    "play": ".play — 🎵 gaana search karke play",
-    "rjoin": ".rjoin — 🔁 call pe auto-join; .rjoin 1,2,3 = files repeat pe",
-    "spotify": ".play <link> — 🎵 link se track/album/playlist queue",
-    "deezer": ".play <link> — 🎵 link se track/album/playlist queue",
-    "nplay": ".nplay — 🎧 natural; .nplay 3 / 1,2,3 / 5,etc / all = natural playlist",
-    "public": ".public — 🌍 mood: group ke owner/admins bot chala sakte hain",
-    "private": ".private — 🔐 mood: sirf owner + core admins (owner cmd)",
-    "rm": ".rm <id> / .rm (reply) / .rm all — core admin remove (owner)",
-    "alist": ".alist — core admin list, 🗑️ button se direct delete",
-    "ytupdate": ".ytupdate — 🔧 player update (owner)",
-    "run": ".run — loop media; .run 1,2,3 / 1-10 / 5,etc / all = 🔁 multi sequential loop",
-    "vrun": ".vrun — reply to video (or URL) to LOOP video",
-    "voice": ".voice — reply to a voice note (play once)",
-    "skip": ".skip — skip current track",
-    "pause": ".pause — pause playback",
-    "resume": ".resume — resume playback",
-    "stop": ".stop — stop & leave voice chat",
-    "now": ".now — show now playing",
-    "queue": ".queue — show music queue",
-    "loop": ".loop — loop whole queue (ON/OFF)",
-    "repeat": ".repeat — repeat current track (ON/OFF)",
-    "boost": ".boost <0-100> — 🚀 ultra booster level (e.g. .boost 50)",
-    "eco": ".eco <0-100> — 🎤 echo/reverb level (e.g. .eco 30)",
-    "gain": ".gain <0-100> — 📢 gain/loudspeaker level (e.g. .gain 40)",
-    "mix": ".mix <0-100> — ⚡ sab effects ek saath (e.g. .mix 50)",
-    "loud": ".loud <0-100> — 🔊 loudspeaker level current song (e.g. .loud 20)",
-    "treble": ".treble <0-100> — 🎼 treble/highs level",
-    "sound": ".sound — 🔊 saare sound levels ek saath dekho",
-    "max": ".max — 💯 SAB effects 100 (Telegram max loud); .max off = sab 0",
-    "volume": ".volume — volume panel / set volume",
-    "menu": ".menu — main menu",
-    "panel": ".panel — player panel",
-    "stats": ".stats — bot stats",
-    "admin": ".admin — reply karke us user ko core admin banao 🔐 private mood me bhi access; .admin add <id|@user> · .admin del (reply)",
-    "lockmusic": ".lockmusic — lock controls to admins",
-    "unlockmusic": ".unlockmusic — unlock for everyone",
-    "files": ".files — list all saved files",
-    "del": ".del 1-10 / .del 1,2,3 — delete saved files",
-    "delall": ".delall — delete all saved files (skips playing)",
-    "set": ".set — reply to a video to show it above menu/help",
-    "run1": ".run1 / .run 1 — loop saved file #1 like .run",
-    "alive": ".alive — system card",
-    "ping": ".ping — latency",
-    "setname": ".setname — change account name",
-    "notesadd": ".notesadd title | body",
-    "lyrics": ".lyrics <song> — 🎤 gaane ke lyrics (Artist - Title best)",
-    "radio": ".radio — 📻 live radio; .radio 1 / 2 / 3 ...",
-    "speed": ".speed <0.5-2.5> — ⚡ playback speed",
-    "nightcore": ".nightcore — ⚡ nightcore mode ON/OFF",
-    "bass": ".bass <0-100> — 🔊 bass boost level (e.g. .bass 20)",
-    "seek": ".seek +30 / -15 — ⏩ current track me aage/peeche",
-    "playlist": ".playlist save <name> / load <name> / del <name> — 🎵 queue save/load",
-    "gban": ".gban <id|reply> — 🚫 global ban (owner); .ungban · .gbanlist",
-    "restart": ".restart — ♻️ bot restart (owner, systemd auto)",
-    "backup": ".backup — 📦 db+session backup zip (owner)",
-    "clean": ".clean — 🧹 temp files clean (owner/core)",
-    "ytdl": ".ytdl <url> — 🎬 youtube video vault me save",
-    "save": ".save <song|url|reply> — 💾 gaana vault me save",
-}
-
-def help_panel():
-    return hub_keyboard()
-
-# ==================== HELP PAGES (GIF attach ke saath) ====================
-# .help ab page-wise hai — har page GIF banner ke sath EK message me
-# (caption <= 1024 chars — Telegram limit). Buttons se page badlo.
-HELP_PAGES = {
-    "hpg_music": ("♪ music deck", page_music_text),
-    "hpg_files": ("📁 vault / files", page_files_text),
-    "hpg_tools": ("🛠️ toolkit", page_tools_text),
-    "hpg_fun": ("🎮 fun deck", page_fun_text),
-    "hpg_admin": ("👑 control room", page_admin_text),
-}
-
-def help_nav(current="hpg_music"):
-    def btn(label, key):
-        return InlineKeyboardButton(("▸ " if key == current else "") + label,
-                                    callback_data=key)
-    return InlineKeyboardMarkup([
-        [btn("🎵 Music", "hpg_music"), btn("📁 Vault", "hpg_files")],
-        [btn("🛠️ Tools", "hpg_tools"), btn("🎮 Fun", "hpg_fun")],
-        [btn("👑 Admin", "hpg_admin"),
-         InlineKeyboardButton("⌂ Hub", callback_data="cb_menu")],
-    ])
-
-async def _show_help_page(message, page_key="hpg_music"):
-    """Ek help page bhejo — GIF banner + page text caption me (sath attach)."""
-    _title, fn = HELP_PAGES.get(page_key, HELP_PAGES["hpg_music"])
-    text = fn()
-    if len(text) > 1024:
-        text = text[:1020] + "…"
-    await send_with_banner(message, text, help_nav(page_key))
-
-@music.on_message(filters.command(["help", "cmds"], prefixes=PREFIX))
-async def help_cmd(client, message):
-    await _show_help_page(message)
+    await message.reply_text(hub_home_text(f"  {stylish('welcome')}, **{u.first_name}**.\n  {stylish('add me to a group + start vc.')}"), reply_markup=hub_keyboard())
 
 @music.on_message(filters.command("menu", prefixes=PREFIX))
 async def menu_cmd(client, message):
-    await send_with_banner(message, hub_home_text(), hub_keyboard())
+    await message.reply_text(hub_home_text(), reply_markup=hub_keyboard())
 
 @music.on_message(filters.command("panel", prefixes=PREFIX))
 async def panel_cmd(client, message):
@@ -3114,741 +1774,6 @@ async def panel_cmd(client, message):
         core_card("player deck", stylish("transport  ·  loop  ·  boost  ·  volume")),
         reply_markup=player_panel(get_queue(message.chat.id)),
     )
-
-@music.on_message(filters.command(["files", "saved", "listfiles"], prefixes=PREFIX))
-async def files_cmd(client, message):
-    if not is_core_admin(message.from_user.id):
-        await message.reply_text("❌ Owner / core admin only.")
-        return
-    text, kb = files_list_text(page=0)
-    await message.reply_text(text, reply_markup=kb)
-
-@music.on_message(filters.command(["del", "delete"], prefixes=PREFIX))
-async def del_cmd(client, message):
-    if not is_core_admin(message.from_user.id):
-        await message.reply_text("❌ Owner / core admin only.")
-        return
-    if len(message.command) < 2:
-        await message.reply_text(
-            f"❌ {stylish('Usage')}:\n"
-            f"`.del 1-10` — {stylish('delete 1 to 10')}\n"
-            f"`.del 1,2,3` — {stylish('delete selected')}\n"
-            f"`.del 1-3,7,9` — {stylish('mix range + numbers')}\n"
-            f"`.files` — {stylish('see the list first')}"
-        )
-        return
-    sync_saved_files()
-    rows = db.get_files()
-    if not rows:
-        await message.reply_text(f"📭 {stylish('No saved files.')}")
-        return
-    spec = "".join(message.command[1:])
-    try:
-        indices = parse_index_spec(spec, len(rows))
-    except ValueError:
-        await message.reply_text(
-            f"❌ {stylish('Invalid list.')}\n"
-            f"Examples: `.del 1-10`  ·  `.del 1,2,3`"
-        )
-        return
-    if not indices:
-        await message.reply_text(
-            f"❌ {stylish('No matching numbers.')}\n"
-            f"{stylish('Valid range')}: `1`–`{len(rows)}`"
-        )
-        return
-    deleted, skipped, missing = delete_files_by_indices(indices)
-    lines = [
-        f"🗑 『{BRAND}』 — {stylish('Delete Files')}",
-        "━━━━━━━━━━━━━━━━━━━━━",
-        f"✅ {stylish('Deleted')}: {len(deleted)}",
-    ]
-    for name in deleted[:15]:
-        lines.append(f"  • {name[:50]}")
-    if len(deleted) > 15:
-        lines.append(f"  … +{len(deleted) - 15} more")
-    if skipped:
-        lines.append(f"▶️ {stylish('Skipped (playing)')}: {len(skipped)}")
-        for name in skipped[:5]:
-            lines.append(f"  • {name[:50]}")
-    if missing:
-        lines.append(f"⚠️ {stylish('Not found')}: {missing}")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    text, kb = files_list_text(page=0)
-    await message.reply_text("\n".join(lines) + "\n\n" + text, reply_markup=kb)
-
-@music.on_message(filters.command(["delall", "deleteall"], prefixes=PREFIX))
-async def delall_cmd(client, message):
-    if not is_core_admin(message.from_user.id):
-        await message.reply_text("❌ Owner / core admin only.")
-        return
-    deleted, skipped = delete_all_saved_files()
-    await message.reply_text(
-        f"🗑 『{BRAND}』 — {stylish('Delete All')}\n"
-        "━━━━━━━━━━━━━━━━━━━━━\n"
-        f"✅ {stylish('Deleted')}: {deleted}\n"
-        f"▶️ {stylish('Skipped (now playing)')}: {skipped}\n"
-        "━━━━━━━━━━━━━━━━━━━━━",
-        reply_markup=main_menu(),
-    )
-
-@music.on_message(filters.command("play", prefixes=PREFIX))
-@needs_vc
-async def play_cmd(client, message):
-    chat_id = message.chat.id
-    q = get_queue(chat_id)
-
-    if not await can_control(client, chat_id, message.from_user.id):
-        await _deny_reply(message)
-        return
-
-    if message.reply_to_message:
-        path = await download_reply_media(message)
-        if path:
-            song = {
-                "title": os.path.basename(path),
-                "duration": 0,
-                "uploader": "DEV X MUSIC",
-                "local_path": path,
-                "source": "local",
-                "temp": True,  # .play reply media store nahi hota
-            }
-            db.bump("total_voice")
-            q.songs.append(song)
-            _sync_play_loop(q)   # 🔁 replied media loop me chale
-            if not q.current:
-                q.current = q.songs.popleft()
-                active_calls.add(chat_id)
-                await play_song(chat_id, q.current)
-            else:
-                await message.reply_text(f"✅ Queued: **{song['title']}**")
-            return
-
-    if len(message.command) < 2:
-        await message.reply_text(
-            f"❌ Please provide a song name or URL.\nExample: `{PREFIX}play despacito`",
-            reply_markup=main_menu(),
-        )
-        return
-
-    query = " ".join(message.command[1:])
-    st = await message.reply_text(f"🔎 『{BRAND}』 — {stylish('Searching')}…")
-
-    if is_url(query):
-        # 🟢 Spotify link (track/album/playlist)
-        if "open.spotify.com" in query:
-            try:
-                sp = await spotify_expand(query)
-            except RuntimeError:
-                await st.delete()
-                await message.reply_text(spotify_setup_help())
-                return
-            if not sp:
-                await st.delete()
-                await message.reply_text("❌ Spotify link se tracks nahi mile.")
-                return
-            await st.delete()
-            await _queue_songs(message, sp, natural=False, label="🎵 playlist")
-            return
-        # 🔴 Deezer link (track/album/playlist)
-        if "deezer.com" in query:
-            dz = await deezer_expand(query)
-            if not dz:
-                await st.delete()
-                await message.reply_text("❌ Deezer link se tracks nahi mile.")
-                return
-            await st.delete()
-            await _queue_songs(message, dz, natural=False, label="🎵 playlist")
-            return
-        song = await _search_guard(asyncio.to_thread(resolve_song, query), 25)
-        await st.delete()
-        if not song:
-            await message.reply_text("❌ Couldn't find that song.", reply_markup=main_menu())
-            return
-        if "soundcloud.com" in query:
-            song["source"] = "soundcloud"
-        q.songs.append(song)
-        _sync_play_loop(q)   # 🔁 song loop me chale
-        if not q.current:
-            q.current = q.songs.popleft()
-            active_calls.add(chat_id)
-            await play_song(chat_id, q.current)
-        else:
-            await message.reply_text(
-                f"✅ 『{BRAND}』 — {stylish('Added')}:\n"
-                f"🎵 {song['title']}\n⏱️ {fmt_duration(song['duration'])} — {stylish('Position')} {len(q.songs)}",
-                reply_markup=player_panel(q),
-            )
-        return
-
-    # 🔎 5 sources: Saavn + YouTube + SoundCloud + Spotify + Deezer
-    # [FIX] har search timeout-guarded — yt-dlp hang ho to bhi command 15s me return karega
-    saavn_results, yt_results, sc_results, sp_results, dz_results = await asyncio.gather(
-        _search_guard(saavn_search(query, limit=4), 15),
-        _search_guard(asyncio.to_thread(resolve_songs, query, 4), 15),
-        _search_guard(asyncio.to_thread(soundcloud_search, query, 2), 15),
-        _search_guard(spotify_search(query, 3), 12),
-        _search_guard(deezer_search(query, 3), 12),
-    )
-    await st.delete()
-    results = (saavn_results or []) + (yt_results or []) + (sc_results or []) + (sp_results or []) + (dz_results or [])
-    if not results:
-        await message.reply_text("❌ No results found.", reply_markup=main_menu())
-        return
-
-    search_seq[0] += 1
-    sid = search_seq[0]
-    search_cache[sid] = results
-    # 🔢 number se bhi select kar sakenge (reply '1' / '1,3,5')
-    last_search[(chat_id, message.from_user.id)] = {"sid": sid, "natural": False, "ts": time.time()}
-
-    text = search_results_text(results, query, natural=False)
-    buttons = []
-    for i, s in enumerate(results):
-        tag = SOURCE_TAG.get(s.get("source"), "🎵")
-        label = s['title'][:25]
-        buttons.append([InlineKeyboardButton(
-            f"{i+1}. {tag} {label}", callback_data=f"cb_pick_{sid}_{i}"
-        )])
-    buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="cb_cancel")])
-    await message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons))
-
-@music.on_message(filters.command("nplay", prefixes=PREFIX))
-@needs_vc
-async def nplay_cmd(client, message):
-    """🎧 .nplay — NATURAL play: bina boost/echo/gain ke, original sound."""
-    chat_id = message.chat.id
-    q = get_queue(chat_id)
-
-    if not await can_control(client, chat_id, message.from_user.id):
-        await _deny_reply(message)
-        return
-
-    # 🎧 saved files natural: `.nplay 3` (single) / `.nplay 1,2,3` / `.nplay all`
-    if not message.reply_to_message and len(message.command) >= 2:
-        arg = "".join(message.command[1:])
-        sync_saved_files()
-        rows = db.get_files()
-        if arg.isdigit():
-            await play_saved_index(message, int(arg), as_video=False, natural=True)
-            return
-        indices = resolve_file_spec(arg, rows)
-        if indices:
-            await play_saved_list(message, indices, as_video=False, natural=True)
-            return
-
-    if message.reply_to_message:
-        path = await download_reply_media(message)
-        if path:
-            song = {
-                "title": os.path.basename(path),
-                "duration": 0,
-                "uploader": "DEV X CORE",
-                "local_path": path,
-                "source": "local",
-                "normal": True,
-            }
-            db.bump("total_voice")
-            q.songs.append(song)
-            _sync_play_loop(q)   # 🔁 replied media loop me chale
-            if not q.current:
-                q.current = q.songs.popleft()
-                active_calls.add(chat_id)
-                await play_song(chat_id, q.current)
-            else:
-                await message.reply_text(f"✅ Queued (natural 🎧): **{song['title']}**")
-            return
-
-    if len(message.command) < 2:
-        await message.reply_text(
-            f"❌ Song name ya URL do.\n"
-            f"Example: `{PREFIX}nplay despacito`\n\n"
-            f"🎧 {stylish('Natural sound')} — {stylish('no boost, no echo, no extra gain')}\n"
-            f"💾 {stylish('Saved files')}: `.nplay 3` · `.nplay 1,2,3` · `.nplay 5,etc` · `.nplay all`",
-            reply_markup=main_menu(),
-        )
-        return
-
-    query = " ".join(message.command[1:])
-    st = await message.reply_text(f"🔎 『{BRAND}』 — {stylish('Searching natural')}…")
-
-    if is_url(query):
-        # 🟢 Spotify link (track/album/playlist) — natural queue
-        if "open.spotify.com" in query:
-            try:
-                sp = await spotify_expand(query)
-            except RuntimeError:
-                await st.delete()
-                await message.reply_text(spotify_setup_help())
-                return
-            if not sp:
-                await st.delete()
-                await message.reply_text("❌ Spotify link se tracks nahi mile.")
-                return
-            await st.delete()
-            await _queue_songs(message, sp, natural=True, label="🎧 playlist")
-            return
-        # 🔴 Deezer link (track/album/playlist) — natural queue
-        if "deezer.com" in query:
-            dz = await deezer_expand(query)
-            if not dz:
-                await st.delete()
-                await message.reply_text("❌ Deezer link se tracks nahi mile.")
-                return
-            await st.delete()
-            await _queue_songs(message, dz, natural=True, label="🎧 playlist")
-            return
-        song = await _search_guard(asyncio.to_thread(resolve_song, query), 25)
-        await st.delete()
-        if not song:
-            await message.reply_text("❌ Couldn't find that song.", reply_markup=main_menu())
-            return
-        if "soundcloud.com" in query:
-            song["source"] = "soundcloud"
-        song["normal"] = True
-        q.songs.append(song)
-        _sync_play_loop(q)   # 🔁 song loop me chale
-        if not q.current:
-            q.current = q.songs.popleft()
-            active_calls.add(chat_id)
-            await play_song(chat_id, q.current)
-        else:
-            await message.reply_text(
-                f"✅ 『{BRAND}』 — {stylish('Added (natural)')}:\n"
-                f"🎵 {song['title']}\n⏱️ {fmt_duration(song['duration'])} — {stylish('Position')} {len(q.songs)}",
-                reply_markup=player_panel(q),
-            )
-        return
-
-    # 🔎 5 sources: Saavn + YouTube + SoundCloud + Spotify + Deezer
-    # [FIX] har search timeout-guarded — yt-dlp hang ho to bhi command 15s me return karega
-    saavn_results, yt_results, sc_results, sp_results, dz_results = await asyncio.gather(
-        _search_guard(saavn_search(query, limit=4), 15),
-        _search_guard(asyncio.to_thread(resolve_songs, query, 4), 15),
-        _search_guard(asyncio.to_thread(soundcloud_search, query, 2), 15),
-        _search_guard(spotify_search(query, 3), 12),
-        _search_guard(deezer_search(query, 3), 12),
-    )
-    await st.delete()
-    results = (saavn_results or []) + (yt_results or []) + (sc_results or []) + (sp_results or []) + (dz_results or [])
-    if not results:
-        await message.reply_text("❌ No results found.", reply_markup=main_menu())
-        return
-
-    search_seq[0] += 1
-    sid = search_seq[0]
-    search_cache[sid] = results
-    # 🔢 number se bhi select kar sakenge (reply '1' / '1,3,5')
-    last_search[(chat_id, message.from_user.id)] = {"sid": sid, "natural": True, "ts": time.time()}
-
-    text = search_results_text(results, query, natural=True)
-    buttons = []
-    for i, s in enumerate(results):
-        tag = SOURCE_TAG.get(s.get("source"), "🎵")
-        label = s['title'][:25]
-        buttons.append([InlineKeyboardButton(
-            f"{i+1}. {tag} {label}", callback_data=f"cb_npick_{sid}_{i}"
-        )])
-    buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="cb_cancel")])
-    await message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons))
-
-@music.on_message(filters.command("run", prefixes=PREFIX))
-@needs_vc
-async def run_cmd(client, message):
-    chat_id = message.chat.id
-    if not await can_control(client, chat_id, message.from_user.id):
-        await _deny_reply(message)
-        return
-    if not message.reply_to_message:
-        if len(message.command) >= 2:
-            sync_saved_files()
-            rows = db.get_files()
-            indices = resolve_file_spec("".join(message.command[1:]), rows)
-            if indices:
-                await play_saved_list(message, indices, as_video=False)
-                return
-            if not rows:
-                await message.reply_text(f"📭 {stylish('No saved files.')} `.files`")
-                return
-            await message.reply_text(
-                "❌ Usage:\n"
-                f"`.run 1`         — {stylish('single file loop')}\n"
-                f"`.run 1,2,3`     — 🔁 {stylish('multiple (jitne bhi chahe)')}\n"
-                f"`.run 1-10`      — {stylish('range loop')}\n"
-                f"`.run 5,etc`     — 🔁 {stylish('from #5 to end (continue)')}\n"
-                f"`.run all`       — 🔁 {stylish('SAARI files ek ke baad ek')}\n"
-                f"`.run1` `.run2`  — {stylish('short form')}\n\n"
-                f"{stylish('Ya reply to voice/audio/video to loop it.')}"
-            )
-            return
-        await message.reply_text(
-            "❌ Reply to a voice/audio/video to loop it.\n"
-            f"Or saved files: `.run 1` · `.run 1,2,3` · `.run 1-10` · `.run 5,etc` · `.run all` · `.run1`"
-        )
-        return
-    st = await message.reply_text(f"⏳ 『{BRAND}』 — {stylish('Processing')}…\n📥 {stylish('Downloading media')}…")
-    path = await download_reply_media(message)
-    if not path:
-        await st.edit_text("❌ That reply has no audio/video.")
-        return
-    song = {
-        "title": os.path.basename(path),
-        "duration": 0,
-        "uploader": "DEV X CORE",
-        "local_path": path,
-        "source": "local",
-        "loudspeaker": True,
-    }
-    q = get_queue(chat_id)
-    q.repeat = True
-    q.loop = False
-    q.songs.clear()
-    q.current = song
-    active_calls.add(chat_id)
-    err_notified.discard(chat_id)
-    ok = await play_song(chat_id, song, announce=False, silent=True)
-    if ok:
-        await st.edit_text(
-            f"🔁 『{BRAND}』 — {stylish('Looping (Loudspeaker)')}\n"
-            f"🎵 `{os.path.basename(path)}`\n"
-            f"📢 {stylish('Extra gain + loudspeaker ON')}\n"
-            f"💾 {stylish('File saved — loops silently, no spam')}"
-        )
-    else:
-        q.repeat = False
-        active_calls.discard(chat_id)
-        await st.edit_text(
-            f"❌ 『{BRAND}』 — {stylish('Could not start loop')}\n"
-            f"{stylish('Start a voice chat first, then .run again.')}"
-        )
-
-@music.on_message(filters.regex(rf"^{re.escape(PREFIX)}(v?run|nplay)(\d+)\s*$"))
-@needs_vc
-async def run_index_cmd(client, message):
-    """`.run1` `.vrun3` `.nplay2` — saved file by its .files number."""
-    if not await can_control(client, message.chat.id, message.from_user.id):
-        await _deny_reply(message)
-        return
-    kind = (message.matches[0].group(1) or "run").lower()
-    num = int(message.matches[0].group(2))
-    if kind == "nplay":
-        # 🎧 natural (no effects), one time
-        await play_saved_index(message, num, as_video=False, natural=True)
-    else:
-        await play_saved_index(message, num, as_video=kind.startswith("v"))
-
-@music.on_message(filters.command(["set", "unset", "setbanner"], prefixes=PREFIX))
-async def set_cmd(client, message):
-    """Reply to a video/photo/gif with `.set` → it becomes a GIF banner
-    attached ON TOP of .menu / .help / .start (single message)."""
-    if not is_core_admin(message.from_user.id):
-        await message.reply_text("❌ Owner / core admin only.")
-        return
-    cmd = (message.command[0] or "set").lower()
-    arg = (message.command[1].lower() if len(message.command) >= 2 else "")
-    if cmd == "unset" or arg in ("off", "clear", "none", "remove"):
-        old = db.get_config("banner_path") or ""
-        db.set_config("banner_path", "")
-        db.set_config("banner_kind", "")
-        if old and os.path.exists(old) and os.path.abspath(old).startswith(os.path.abspath(BANNER_DIR)):
-            try:
-                os.remove(old)
-            except Exception:
-                pass
-        await message.reply_text(f"✅ 『{BRAND}』 — {stylish('Banner removed.')}")
-        return
-
-    r = message.reply_to_message
-    if r is None:
-        await message.reply_text(
-            f"🎬 『{BRAND}』 — {stylish('Set GIF banner')}\n"
-            "━━━━━━━━━━━━━━━━━━━━━\n"
-            f"{stylish('Reply to a video / photo / gif with')} `.set`\n"
-            f"{stylish('It converts to a GIF and attaches ON TOP of')}\n"
-            f"{stylish('.menu / .help / .start — one message.')}\n\n"
-            f"`.set off` — {stylish('remove banner')}"
-        )
-        return
-
-    # what kind of media was replied?
-    media_kind = None
-    if r.animation:
-        media_kind = "animation"
-    elif r.video or r.video_note:
-        media_kind = "video"
-    elif r.photo:
-        media_kind = "photo"
-    elif r.document and (r.document.mime_type or "").startswith(("video/", "image/")):
-        mime = r.document.mime_type or ""
-        media_kind = "animation" if "gif" in mime else ("photo" if mime.startswith("image/") else "video")
-    else:
-        await message.reply_text("❌ Reply to a **video / photo / gif** with `.set`")
-        return
-
-    st = await message.reply_text(f"⏳ 『{BRAND}』 — {stylish('Converting to GIF')}…")
-    src = os.path.join(TEMP_DIR, f"banner_src_{uuid.uuid4().hex}")
-    try:
-        await r.download(file_name=src)
-
-        # wipe previous banner files (keep the default logo)
-        for name in os.listdir(BANNER_DIR):
-            if name in ("devx_logo.png", "devx_logo.gif"):
-                continue
-            fp = os.path.join(BANNER_DIR, name)
-            try:
-                if os.path.isfile(fp):
-                    os.remove(fp)
-            except Exception:
-                pass
-
-        if media_kind == "animation":
-            # already a GIF — keep it as-is
-            ext = (r.document.file_name or "").rsplit(".", 1)[-1].lower() if r.document and r.document.file_name else ""
-            ext = ("." + ext) if ext in ("gif", "mp4", "webm") else ".gif"
-            dest = os.path.join(BANNER_DIR, f"menu_banner{ext}")
-            os.replace(src, dest)
-            kind = "animation"
-        elif media_kind == "video":
-            # video -> looping GIF (mp4 animation, no audio)
-            dest = os.path.join(BANNER_DIR, "menu_banner.mp4")
-            video_to_gif(src, dest)
-            kind = "animation"
-        else:
-            # photo -> animated GIF (gentle zoom pulse)
-            dest = os.path.join(BANNER_DIR, "menu_banner.gif")
-            try:
-                photo_to_gif(src, dest)
-                kind = "animation"
-            except Exception as e:
-                logger.warning("photo->gif (PIL) failed: %s — trying ffmpeg", e)
-                try:
-                    _run_ffmpeg(["-loop", "1", "-i", src, "-vf", "fps=5", "-t", "2", dest])
-                    kind = "animation"
-                except Exception as e2:
-                    logger.warning("photo->gif (ffmpeg) failed too: %s — keeping photo", e2)
-                    os.replace(src, dest)
-                    kind = "photo"
-
-        if os.path.exists(src):
-            try:
-                os.remove(src)
-            except Exception:
-                pass
-        db.set_config("banner_path", dest)
-        db.set_config("banner_kind", kind)
-        await st.edit_text(
-            f"✅ 『{BRAND}』 — {stylish('GIF banner saved')}\n"
-            f"🎞️ {stylish('Type')}: {'GIF (animated)' if kind == 'animation' else 'photo (fallback)'}\n"
-            f"{stylish('Now .menu / .help / .start show it attached on top.')}"
-        )
-    except Exception as e:
-        if os.path.exists(src):
-            try:
-                os.remove(src)
-            except Exception:
-                pass
-        await st.edit_text(
-            f"❌ {stylish('Save failed')}: `{e}`\n"
-            f"💡 {stylish('video → GIF needs ffmpeg')}: `sudo apt install -y ffmpeg`"
-        )
-
-@music.on_message(filters.command("voice", prefixes=PREFIX))
-async def voice_cmd(client, message):
-    if not message.reply_to_message:
-        await message.reply_text(f"❌ Reply to a voice note with {PREFIX}voice")
-        return
-    await play_cmd(client, message)
-
-# ---- VIDEO RUN IN LOOP (.vrun) ----
-@music.on_message(filters.command("vrun", prefixes=PREFIX))
-@needs_vc
-async def vrun_cmd(client, message):
-    chat_id = message.chat.id
-    q = get_queue(chat_id)
-    if not await can_control(client, chat_id, message.from_user.id):
-        await _deny_reply(message)
-        return
-
-    st = await message.reply_text(f"🎬 『{BRAND}』 — {stylish('Processing video')}…")
-
-    # source: replied video OR a YouTube URL (always save to a local file)
-    song = None
-    if message.reply_to_message:
-        path = await download_reply_media(message)
-        if not path:
-            await st.edit_text("❌ Reply to a video to loop it.")
-            return
-        song = {
-            "title": os.path.basename(path),
-            "duration": 0,
-            "uploader": "DEV X CORE",
-            "local_path": path,
-            "source": "local",
-            "video": True,
-            "loudspeaker": True,
-        }
-    elif len(message.command) >= 2:
-        arg = "".join(message.command[1:])
-        if arg.isdigit():
-            await st.delete()
-            await play_saved_index(message, int(arg), as_video=True)
-            return
-        sync_saved_files()
-        rows = db.get_files()
-        indices = resolve_file_spec(arg, rows)
-        if indices:
-            # `.vrun 1,2,3` / `.vrun 1-5` / `.vrun all` — video playlist loop
-            await st.delete()
-            await play_saved_list(message, indices, as_video=True)
-            return
-        url = arg
-        if not is_url(url):
-            await st.edit_text(
-                "❌ Reply to a video, ya video URL do.\n"
-                f"{stylish('Saved files')}: `.vrun 2` · `.vrun 1,2,3` · `.vrun 5,etc` · `.vrun all` · `.vrun1`"
-            )
-            return
-        await st.edit_text(f"🎬 『{BRAND}』 — {stylish('Downloading video')}…")
-        try:
-            info = await asyncio.to_thread(_try_resolve, url)
-            if info.get("entries"):
-                info = info["entries"][0]
-            vurl = info.get("webpage_url") or info.get("url")
-            if not vurl:
-                await st.edit_text("❌ Couldn't resolve that video.")
-                return
-            local = await asyncio.to_thread(download_youtube_video, vurl)
-            song = {
-                "title": info.get("title") or os.path.basename(local),
-                "duration": info.get("duration") or 0,
-                "uploader": info.get("uploader") or info.get("channel") or "YouTube",
-                "local_path": local,
-                "webpage_url": info.get("webpage_url"),
-                "source": "youtube",
-                "video": True,
-                "loudspeaker": True,
-            }
-            register_saved_file(local, song["title"], "youtube", chat_id)
-        except Exception as e:
-            await st.edit_text(f"❌ Video download failed: {e}")
-            return
-    else:
-        await st.edit_text(
-            f"❌ Reply to a video, or use: `{PREFIX}vrun <video url>`\n"
-            f"Or saved files: `.vrun1` · `.vrun 2` · `.vrun 1,2,3` · `.vrun 5,etc` · `.vrun all`"
-        )
-        return
-
-    q.repeat = True
-    q.loop = False
-    q.songs.clear()
-    q.current = song
-    active_calls.add(chat_id)
-    err_notified.discard(chat_id)
-    ok = await play_song(chat_id, song, announce=False, silent=True)
-    if ok:
-        await st.edit_text(
-            f"🎬 『{BRAND}』 — {stylish('Video Looping (Loudspeaker)')}\n"
-            f"🎥 `{song['title']}`\n"
-            f"📢 {stylish('Extra gain + loudspeaker ON')}\n"
-            f"💾 {stylish('File saved — loops silently, no spam')}"
-        )
-    else:
-        q.repeat = False
-        active_calls.discard(chat_id)
-        await st.edit_text(
-            f"❌ 『{BRAND}』 — {stylish('Could not start video loop')}\n"
-            f"{stylish('Start a voice chat first, then .vrun again.')}"
-        )
-
-@music.on_message(filters.command("skip", prefixes=PREFIX))
-@needs_vc
-async def skip_cmd(client, message):
-    chat_id = message.chat.id
-    q = get_queue(chat_id)
-    if not await can_control(client, chat_id, message.from_user.id):
-        await _deny_reply(message)
-        return
-    if q.songs:
-        old = q.current
-        q.current = q.songs.popleft()
-        await play_song(chat_id, q.current)
-        # temp (streamed) song skip hua -> file auto-delete
-        if old is not None:
-            _delete_temp_song_files(old)
-        await message.reply_text("⏭️ Skipped! 🎶")
-    else:
-        old = q.current
-        q.current = None
-        if old is not None:
-            _delete_temp_song_files(old)
-        try:
-            await vc.leave_call(chat_id)
-        except Exception:
-            pass
-        active_calls.discard(chat_id)
-        await message.reply_text("⏭️ Skipped. Queue empty — stopped.")
-
-@music.on_message(filters.command("pause", prefixes=PREFIX))
-@needs_vc
-async def pause_cmd(client, message):
-    if not await can_control(client, message.chat.id, message.from_user.id):
-        await _deny_reply(message)
-        return
-    try:
-        await vc.pause(message.chat.id)
-        _pause_timer(message.chat.id)  # position wahi rukti hai
-        await message.reply_text("⏸️ Paused.")
-    except Exception:
-        await message.reply_text("❌ Nothing is playing.")
-
-@music.on_message(filters.command("resume", prefixes=PREFIX))
-@needs_vc
-async def resume_cmd(client, message):
-    if not await can_control(client, message.chat.id, message.from_user.id):
-        await _deny_reply(message)
-        return
-    try:
-        await vc.resume(message.chat.id)
-        _resume_timer(message.chat.id)  # position wahi se aage badhti hai
-        await message.reply_text("▶️ Resumed.")
-    except Exception:
-        await message.reply_text("❌ Nothing is paused.")
-
-@music.on_message(filters.command("stop", prefixes=PREFIX))
-@needs_vc
-async def stop_cmd(client, message):
-    chat_id = message.chat.id
-    q = get_queue(chat_id)
-    if not await can_control(client, chat_id, message.from_user.id):
-        await _deny_reply(message)
-        return
-    queued = list(q.songs)
-    q.songs.clear()
-    old = q.current
-    q.current = None
-    q.loop = False
-    q.repeat = False
-    q.silent_loop = False
-    active_calls.discard(chat_id)
-    current_files.pop(chat_id, None)
-    err_notified.discard(chat_id)
-    replay_lock.discard(chat_id)
-    PLAY_TIMERS.pop(chat_id, None)
-    # temp (streamed) songs ke files auto-delete — saved files rehte hain
-    if old is not None:
-        _delete_temp_song_files(old)
-    for _s in queued:
-        _delete_temp_song_files(_s)
-    # files stay saved — use .files / .del / .delall to manage them
-    try:
-        await vc.leave_call(chat_id)
-        await message.reply_text(
-            "⏹️ Stopped & left the voice chat.\n"
-            f"📁 {stylish('Files kept')} — `.files` {stylish('to view')} · `.delall` {stylish('to clear')}"
-        )
-    except Exception:
-        await message.reply_text("❌ Not in a voice chat.")
 
 @music.on_message(filters.command("queue", prefixes=PREFIX))
 async def queue_cmd(client, message):
@@ -3876,7 +1801,7 @@ async def loop_cmd(client, message):
     q.loop = not q.loop
     if q.loop:
         q.repeat = False
-        q.silent_loop = True   # 🔁 loop cycles spam-free
+        q.silent_loop = True
     else:
         q.silent_loop = False
     await message.reply_text(f"🔁 『{BRAND}』 — {stylish('Loop')}: {stylish('ON' if q.loop else 'OFF')}")
@@ -3891,10 +1816,9 @@ async def repeat_cmd(client, message):
     q.repeat = not q.repeat
     if q.repeat:
         q.loop = False
-        q.silent_loop = True   # 🔂 repeat spam-free
+        q.silent_loop = True
     else:
         q.silent_loop = False
-    # re-apply stream so ffmpeg -stream_loop matches the new state (no extra spam)
     if q.current:
         await reapply_current_effects(message.chat.id)
     await message.reply_text(f"🔂 『{BRAND}』 — {stylish('Repeat')}: {stylish('ON' if q.repeat else 'OFF')}")
@@ -3902,12 +1826,11 @@ async def repeat_cmd(client, message):
 @music.on_message(filters.command("boost", prefixes=PREFIX))
 @needs_vc
 async def boost_cmd(client, message):
-    """🚀 .boost <0-100> — ultra booster LEVEL (sound+echo+max gain)."""
     if not await can_control(client, message.chat.id, message.from_user.id):
         await _deny_reply(message)
         return
     q = get_queue(message.chat.id)
-    arg = _arg(message).lower()
+    arg = " ".join(message.command[1:]).lower() if len(message.command) > 1 else ""
     if arg in ("on", "max"):
         q.boost_level = 100
     elif arg in ("off", "0", "none", "reset"):
@@ -3916,7 +1839,6 @@ async def boost_cmd(client, message):
         q.boost_level = max(0, min(100, int(float(arg))))
     else:
         q.boost_level = 0 if q.boost_level > 0 else 100
-    # re-apply to current song if playing
     if q.current:
         await reapply_current_effects(message.chat.id)
     await message.reply_text(
@@ -3927,12 +1849,11 @@ async def boost_cmd(client, message):
 @music.on_message(filters.command("eco", prefixes=PREFIX))
 @needs_vc
 async def eco_cmd(client, message):
-    """🎤 .eco <0-100> — echo/reverb LEVEL."""
     if not await can_control(client, message.chat.id, message.from_user.id):
         await _deny_reply(message)
         return
     q = get_queue(message.chat.id)
-    arg = _arg(message).lower()
+    arg = " ".join(message.command[1:]).lower() if len(message.command) > 1 else ""
     if arg in ("on", "max"):
         q.eco_level = 100
     elif arg in ("off", "0", "none", "reset"):
@@ -3951,12 +1872,11 @@ async def eco_cmd(client, message):
 @music.on_message(filters.command("gain", prefixes=PREFIX))
 @needs_vc
 async def gain_cmd(client, message):
-    """📢 .gain <0-100> — global gain/loudspeaker LEVEL (all plays)."""
     if not await can_control(client, message.chat.id, message.from_user.id):
         await _deny_reply(message)
         return
     q = get_queue(message.chat.id)
-    arg = _arg(message).lower()
+    arg = " ".join(message.command[1:]).lower() if len(message.command) > 1 else ""
     if arg in ("on", "max"):
         q.gain_level = 100
     elif arg in ("off", "0", "none", "reset"):
@@ -3965,7 +1885,6 @@ async def gain_cmd(client, message):
         q.gain_level = max(0, min(100, int(float(arg))))
     else:
         q.gain_level = 0 if q.gain_level > 0 else 100
-    # re-apply to current song if playing
     if q.current:
         await reapply_current_effects(message.chat.id)
     await message.reply_text(
@@ -3976,12 +1895,11 @@ async def gain_cmd(client, message):
 @music.on_message(filters.command("mix", prefixes=PREFIX))
 @needs_vc
 async def mix_cmd(client, message):
-    """⚡ .mix <0-100> — SAB effects ek saath ek hi level pe."""
     if not await can_control(client, message.chat.id, message.from_user.id):
         await _deny_reply(message)
         return
     q = get_queue(message.chat.id)
-    arg = _arg(message).lower()
+    arg = " ".join(message.command[1:]).lower() if len(message.command) > 1 else ""
     if arg in ("off", "0", "none", "reset"):
         lvl = 0
     elif arg.replace(".", "", 1).isdigit():
@@ -4004,12 +1922,11 @@ async def mix_cmd(client, message):
 @music.on_message(filters.command("loud", prefixes=PREFIX))
 @needs_vc
 async def loud_cmd(client, message):
-    """🔊 .loud <0-100> — loudspeaker LEVEL (current song)."""
     if not await can_control(client, message.chat.id, message.from_user.id):
         await _deny_reply(message)
         return
     q = get_queue(message.chat.id)
-    arg = _arg(message).lower()
+    arg = " ".join(message.command[1:]).lower() if len(message.command) > 1 else ""
     if arg in ("on", "max"):
         q.loud_level = 100
     elif arg in ("off", "0", "none", "reset"):
@@ -4020,7 +1937,6 @@ async def loud_cmd(client, message):
         q.loud_level = 0 if q.loud_level > 0 else 100
     if q.current:
         q.current["loudspeaker"] = q.loud_level > 0
-    # replay current with new setting
     await reapply_current_effects(message.chat.id)
     await message.reply_text(
         f"🔊 『{BRAND}』 — {stylish('Loudspeaker')}: `{q.loud_level}%`\n"
@@ -4043,7 +1959,7 @@ async def volume_cmd(client, message):
         if not (0 <= v <= 5000):
             raise ValueError
         q.volume = v
-        _vol_auto[message.chat.id] = False   # user ne set kiya → ab auto-high nahi
+        _vol_auto[message.chat.id] = False
         if vc_ready():
             try:
                 await vc.change_volume_call(message.chat.id, min(v, 200))
@@ -4056,10 +1972,6 @@ async def volume_cmd(client, message):
 
 @music.on_message(filters.command("stats", prefixes=PREFIX))
 async def stats_cmd(client, message):
-    sync_saved_files()
-    saved = db.get_files()
-    saved_size = sum(r[4] or 0 for r in saved)
-    # [FIX] real users count — DB me jitne hain utne (purane stats ke liye fallback)
     try:
         real_users = len(db.get_users())
     except Exception:
@@ -4067,9 +1979,7 @@ async def stats_cmd(client, message):
     body = (
         f"  👥 {stylish('users')}        `{real_users}`\n"
         f"  🎵 {stylish('played')}       `{db.get_stat('total_played')}`\n"
-        f"  🎙️  {stylish('voice notes')}  `{db.get_stat('total_voice')}`\n"
         f"  📞 {stylish('live vc')}      `{len(active_calls)}`\n"
-        f"  📁 {stylish('vault')}        `{len(saved)}`  ({fmt_size(saved_size)})\n"
         f"  ⏱️  {stylish('uptime')}       `{fmt_uptime()}`\n"
     )
     await message.reply_text(core_card("telemetry", body), reply_markup=hub_keyboard())
@@ -4092,19 +2002,9 @@ async def unlockmusic_cmd(client, message):
 
 @music.on_message(filters.command("admin", prefixes=PREFIX))
 async def admin_cmd(client, message):
-    """Owner panel + core-admin management.
-    Panel: owner + core admins dekh sakte hain.
-    Add/Del: SIRF owner kar sakta hai.
-
-    👥 REPLY MODE: kisi ke message pe reply karke .admin lagao
-    -> wo user turant core admin ban jata hai (private mood me bhi access).
-    .admin          (reply)  -> add
-    .admin del      (reply)  -> remove"""
     if not is_core_admin(message.from_user.id):
         await message.reply_text("❌ Owner / core admins only.")
         return
-
-    # 👥 REPLY MODE: replied user ko add/remove (sirf OWNER)
     if message.reply_to_message:
         if message.from_user.id != OWNER_ID:
             await message.reply_text("❌ Sirf **OWNER** hi admin add/remove kar sakta hai. 👑")
@@ -4125,15 +2025,14 @@ async def admin_cmd(client, message):
                 return
             del_core_admin(_ru.id)
             await message.reply_text(
-                f"🗑️ 👑 {_nm} (`{_ru.id}`) admin list se hata diya.\n\n" + core_admins_text()
+                f"🗑️ 👑 {_nm} (`{_ru.id}`) admin list se hata diya."
             )
         else:
             add_core_admin(_ru.id)
             await message.reply_text(
-                f"✅ 👑 {_nm} (`{_ru.id}`) ab **core admin** hai — 🔐 private mood me bhi access!\n\n" + core_admins_text()
+                f"✅ 👑 {_nm} (`{_ru.id}`) ab **core admin** hai — 🔐 private mood me bhi access!"
             )
         return
-
     args = message.command[1:]
     if args:
         action = args[0].lower()
@@ -4167,35 +2066,35 @@ async def admin_cmd(client, message):
                 return
             if action == "add":
                 add_core_admin(uid)
-                await message.reply_text(f"✅ 👑 `{uid}` ab **core admin** hai!\n\n" + core_admins_text())
+                await message.reply_text(f"✅ 👑 `{uid}` ab **core admin** hai!")
             else:
                 if uid == OWNER_ID:
                     await message.reply_text("❌ Owner ko remove nahi kar sakte. 👑")
                     return
                 del_core_admin(uid)
-                await message.reply_text(f"🗑️ 👑 `{uid}` admin list se hata diya.\n\n" + core_admins_text())
+                await message.reply_text(f"🗑️ 👑 `{uid}` admin list se hata diya.")
             return
         if action in ("list", "admins"):
-            await message.reply_text(core_admins_text())
+            admins = sorted(get_core_admins())
+            lines = [f"📋 『{BRAND}』 — {stylish('Core Admin List')}", "━━━━━━━━━━━━━━━━━━━━━"]
+            for a in admins:
+                tag = "👑 owner" if a == OWNER_ID else "🛡️ admin"
+                lines.append(f"• `{a}` · {tag}")
+            lines.append("━━━━━━━━━━━━━━━━━━━━━")
+            await message.reply_text("\n".join(lines))
             return
-
     await message.reply_text(
         "👑 **𝐃𝐄𝐕 𝐗 𝐂𝐎𝐑𝐄 — Owner Panel**\n"
         "━━━━━━━━━━━━━━━━━━━━━\n"
         f"{stylish('Admin manage')}:\n"
         "`.admin` (reply) — replied user ko admin banao 👑\n"
-        "`.admin add <id|@user>` · `.admin del` (reply) · `.rm` · `.alist`",
+        "`.admin add <id|@user>` · `.admin del` (reply)",
         reply_markup=owner_panel(),
     )
 
 @music.on_message(filters.command("rjoin", prefixes=PREFIX))
 async def rjoin_cmd(client, message):
-    """🔁 .rjoin — is group me jab bhi voice call lage, userbot KHUD join karega.
-
-    .rjoin          -> sirf auto-join
-    .rjoin 1,2,3    -> auto-join + files 1,2,3 repeat pe silent play
-    .rjoin all / 1-5 / 2,etc
-    .rjoin off      -> band"""
+    """Removed file-based rjoin; kept simple auto-join info."""
     chat_id = message.chat.id
     if chat_id > 0:
         await message.reply_text("❌ Sirf group me chalta hai — private chat me nahi.")
@@ -4204,70 +2103,28 @@ async def rjoin_cmd(client, message):
         await _deny_reply(message)
         return
     args = message.command[1:]
-    if not args:
-        set_rjoin_spec(chat_id, "join")
-        body = (
-            f"  🔁 {stylish('AUTO-JOIN ON (join only)')}\n\n"
-            f"  ▸  {stylish('jab bhi call lagega, bot khud join karega')}\n"
-            f"  ▸  {stylish('audio ke liye')}: `.rjoin 1,2,3`\n"
-            f"  ▸  {stylish('band')}: `.rjoin off`"
-        )
-        await message.reply_text(core_card("auto join", body))
-        return
-    arg = args[0].strip().lower()
-    if arg in ("off", "stop", "disable", "0"):
-        set_rjoin_spec(chat_id, "")
+    if not args or args[0].strip().lower() in ("off", "stop", "0"):
         await message.reply_text(
             f"🔕 『{BRAND}』 — {stylish('Auto-join OFF')}.\n"
-            f"{stylish('Wapas on')}: `.rjoin` ya `.rjoin 1,2,3`"
+            f"{stylish('Wapas on')}: `.rjoin`"
         )
         return
-    if arg in ("status", "info"):
-        spec = get_rjoin_spec(chat_id)
-        if spec is None:
-            await message.reply_text(f"📭 {stylish('Auto-join set nahi hai.')}\n`.rjoin` / `.rjoin 1,2,3`")
-        else:
-            await message.reply_text(
-                f"🔁 『{BRAND}』 — {stylish('Auto-Join Status')}\n"
-                f"  ▸  {stylish('spec')}: `{spec}`"
-            )
-        return
-    # files spec: .rjoin 1,2,3 / all / 1-5 / 2,etc
-    sync_saved_files()
-    rows = db.get_files()
-    if not rows:
-        await message.reply_text(f"📭 {stylish('No saved files.')} `.files`")
-        return
-    indices = resolve_file_spec("".join(args), rows)
-    if not indices:
-        await message.reply_text(
-            f"❌ {stylish('Invalid spec')}. {stylish('Valid')}: `1`–`{len(rows)}`\n"
-            f"`.rjoin 1,2,3` · `.rjoin all` · `.rjoin 2,etc`"
-        )
-        return
-    names = []
-    for i in indices:
-        if 0 <= i < len(rows):
-            names.append(rows[i][2] or os.path.basename(rows[i][1]))
-    spec = ",".join(str(i + 1) for i in indices)
-    set_rjoin_spec(chat_id, spec)
-    listing = "\n".join(f"  {n + 1}. 🎵 {nm}" for n, nm in enumerate(names[:25]))
-    if len(names) > 25:
-        listing += f"\n  … +{len(names) - 25} more"
+    set_rjoin_spec = db.set_config
+    spec = " ".join(args)
+    set_rjoin_spec(f"rjoin:{chat_id}", spec)
     await message.reply_text(
-        f"🔁 『{BRAND}』 — {stylish('Auto-Join + Repeat ON')}\n"
-        "━━━━━━━━━━━━━━━━━━━━━\n"
-        f"{listing}\n"
-        "━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📚 {stylish('total')}: {len(names)} {stylish('files')}\n"
-        f"{stylish('Jitni baar call lagegi, utni baar ye repeat pe play honge')} — {stylish('spam nahi')}.\n"
+        f"🔁 『{BRAND}』 — {stylish('Auto-Join ON')}\n"
+        f"  ▸  {stylish('spec')}: `{spec}`\n"
+        f"{stylish('Jab bhi call lagega, bot khud join karega.')}\n"
         f"{stylish('Band')}: `.rjoin off`"
     )
 
+def get_rjoin_spec(chat_id):
+    raw = (db.get_config(f"rjoin:{chat_id}") or "").strip()
+    return raw or None
+
 @music.on_message(filters.command(["public", "private"], prefixes=PREFIX))
 async def mode_cmd(client, message):
-    """🎭 Bot mood: .public (group admins chala sakte hain) /
-    .private (sirf owner + core admins). Sirf OWNER change kar sakta hai."""
     if message.from_user.id != OWNER_ID:
         await message.reply_text("❌ Sirf **OWNER** hi mood change kar sakta hai. 👑")
         return
@@ -4284,24 +2141,22 @@ async def mode_cmd(client, message):
         body = (
             f"  🔐 {stylish('PRIVATE MODE ON')}\n\n"
             f"  ▸  {stylish('sirf OWNER + core admins')} 👑\n"
-            f"  ▸  {stylish('core admins')}: `.admin` (reply) · `.admin add <id|@user>` · `.alist`\n"
         )
         footer = stylish("mood: private")
     await message.reply_text(core_card("bot mood", body, footer))
 
 @music.on_message(filters.command(["rm", "removeadmin"], prefixes=PREFIX))
 async def rm_cmd(client, message):
-    """🗑️ .rm — core admin remove karo (id / reply / all). Sirf OWNER."""
     if message.from_user.id != OWNER_ID:
         await message.reply_text("❌ Sirf **OWNER** admin remove kar sakta hai. 👑")
         return
-    arg = _arg(message).strip().lower()
+    arg = " ".join(message.command[1:]).strip().lower()
     if arg in ("all", "*"):
         removed = sorted(get_core_admins() - {OWNER_ID})
         for a in removed:
             del_core_admin(a)
         await message.reply_text(
-            f"🗑️ {stylish('All core admins removed')}: {len(removed)}\n\n" + core_admins_text()
+            f"🗑️ {stylish('All core admins removed')}: {len(removed)}"
         )
         return
     uid = None
@@ -4321,26 +2176,16 @@ async def rm_cmd(client, message):
         await message.reply_text("❌ Owner ko remove nahi kar sakte. 👑")
         return
     if not is_core_admin(uid):
-        await message.reply_text(f"❌ `{uid}` core admin list me hai hi nahi.\n`.alist`")
+        await message.reply_text(f"❌ `{uid}` core admin list me hai hi nahi.")
         return
     del_core_admin(uid)
-    await message.reply_text(f"🗑️ `{uid}` {stylish('core admin list se removed')}.\n\n" + core_admins_text())
+    await message.reply_text(f"🗑️ `{uid}` {stylish('core admin list se removed')}.")
 
-def _admin_display(uid):
-    """Admin ka naam/username DB se (nahi mila to id)."""
-    try:
-        r = db.c.execute(
-            "SELECT username, first_name FROM users WHERE id=?", (uid,)
-        ).fetchone()
-    except Exception:
-        r = None
-    if r and r[0]:
-        return f"@{r[0]}"
-    if r and r[1]:
-        return r[1]
-    return str(uid)
-
-def admin_list_card():
+@music.on_message(filters.command(["alist", "adminlist"], prefixes=PREFIX))
+async def alist_cmd(client, message):
+    if not is_core_admin(message.from_user.id):
+        await message.reply_text("❌ Owner / core admin only.")
+        return
     admins = sorted(get_core_admins())
     lines = [
         f"📋 『{BRAND}』 — {stylish('Core Admin List')}",
@@ -4348,34 +2193,10 @@ def admin_list_card():
     ]
     for a in admins:
         tag = "👑 owner" if a == OWNER_ID else "🛡️ admin"
-        lines.append(f"• {_admin_display(a)} · `{a}` · {tag}")
+        lines.append(f"• `{a}` · {tag}")
     lines.append("━━━━━━━━━━━━━━━━━━━━━")
-    lines.append(f"🗑️ {stylish('Direct delete')}: 🗑️ button dabao (sirf owner)")
     lines.append(f"👉 `.rm <id>` · `.rm all` · `.admin add <id>`")
-    return "\n".join(lines)
-
-def admin_list_kb():
-    admins = sorted(get_core_admins())
-    rows = []
-    for a in admins:
-        if a == OWNER_ID:
-            continue
-        rows.append([InlineKeyboardButton(
-            f"🗑️ {_admin_display(a)}", callback_data=f"alist_del_{a}"
-        )])
-    rows.append([
-        InlineKeyboardButton("🔄 Refresh", callback_data="cb_adminlist"),
-        InlineKeyboardButton("⌂ Hub", callback_data="cb_menu"),
-    ])
-    return InlineKeyboardMarkup(rows)
-
-@music.on_message(filters.command(["alist", "adminlist"], prefixes=PREFIX))
-async def alist_cmd(client, message):
-    """📋 .alist — saare core admins, direct 🗑️ delete buttons ke saath."""
-    if not is_core_admin(message.from_user.id):
-        await message.reply_text("❌ Owner / core admin only.")
-        return
-    await message.reply_text(admin_list_card(), reply_markup=admin_list_kb())
+    await message.reply_text("\n".join(lines))
 
 @music.on_message(filters.command("servers", prefixes=PREFIX))
 async def servers_cmd(client, message):
@@ -4440,18 +2261,148 @@ async def ban_cmd(client, message):
         db.unban_user(uid)
         await message.reply_text(f"✅ Unbanned `{uid}`.")
 
-@music.on_message(filters.command("bio", prefixes=PREFIX) & filters.user(OWNER_ID))
-async def bio_cmd(client, message):
-    if len(message.command) < 2:
-        await message.reply_text(f"❌ `{PREFIX}bio <text>`")
+GBAN_KEY = "gbans"
+
+def get_gbans():
+    raw = db.get_config(GBAN_KEY, "") or ""
+    ids = {int(x) for x in raw.split(",") if x.strip().isdigit()}
+    ids.discard(OWNER_ID)
+    return ids
+
+def gban_user(uid):
+    ids = get_gbans()
+    ids.add(int(uid))
+    db.set_config(GBAN_KEY, ",".join(str(i) for i in sorted(ids)))
+
+def ungban_user(uid):
+    ids = get_gbans()
+    ids.discard(int(uid))
+    db.set_config(GBAN_KEY, ",".join(str(i) for i in sorted(ids)))
+
+def uid_gbanned(uid):
+    try:
+        return int(uid) in get_gbans()
+    except Exception:
+        return False
+
+@music.on_message(filters.command("gban", prefixes=PREFIX))
+async def gban_cmd(client, message):
+    if message.from_user.id != OWNER_ID:
+        await message.reply_text(f"❌ {stylish('Sirf OWNER')} 👑")
         return
-    await music.update_profile(bio=" ".join(message.command[1:]))
-    await message.reply_text("✅ Bio updated.")
+    uid = None
+    if message.reply_to_message and message.reply_to_message.from_user:
+        uid = message.reply_to_message.from_user.id
+    elif " ".join(message.command[1:]).lstrip("-").isdigit():
+        uid = int(" ".join(message.command[1:]))
+    if not uid or uid == OWNER_ID:
+        await message.reply_text(f"❌ {stylish('Reply karo ya user id do')} ({stylish('owner ko nahi')}).")
+        return
+    gban_user(uid)
+    await message.reply_text(
+        f"🚫 『{BRAND}』 — {stylish('Global banned')}: `{uid}`\n"
+        f"{stylish('Ab wo bot use nahi kar sakta')}."
+    )
+
+@music.on_message(filters.command("ungban", prefixes=PREFIX))
+async def ungban_cmd(client, message):
+    if message.from_user.id != OWNER_ID:
+        await message.reply_text(f"❌ {stylish('Sirf OWNER')} 👑")
+        return
+    uid = None
+    if message.reply_to_message and message.reply_to_message.from_user:
+        uid = message.reply_to_message.from_user.id
+    elif " ".join(message.command[1:]).lstrip("-").isdigit():
+        uid = int(" ".join(message.command[1:]))
+    if not uid:
+        await message.reply_text(f"❌ {stylish('Reply karo ya user id do')}.")
+        return
+    ungban_user(uid)
+    await message.reply_text(f"✅ 『{BRAND}』 — {stylish('Unbanned')}: `{uid}`")
+
+@music.on_message(filters.command("gbanlist", prefixes=PREFIX))
+async def gbanlist_cmd(client, message):
+    if not is_core_admin(message.from_user.id):
+        await message.reply_text(f"❌ {stylish('Owner / core admin only')}.")
+        return
+    ids = sorted(get_gbans())
+    if not ids:
+        await message.reply_text(f"📭 {stylish('Koi gban nahi')}.")
+        return
+    await message.reply_text(
+        "🚫 **Global Bans**\n━━━━━━━━━━━━━━━━━━━━━\n" +
+        "\n".join(f"• `{i}`" for i in ids)
+    )
+
+@music.on_message(filters.command("restart", prefixes=PREFIX) & filters.user(OWNER_ID))
+async def restart_cmd(client, message):
+    try:
+        await message.reply_text(
+            f"♻️ 『{BRAND}』 — {stylish('Restarting')}…\n"
+            f"⏳ {stylish('2-5 sec me wapas online')} — `.ping` {stylish('se check karo')}"
+        )
+    except Exception:
+        pass
+    await asyncio.sleep(1)
+    try:
+        await music.stop()
+    except Exception:
+        pass
+    try:
+        await bot.stop()
+    except Exception:
+        pass
+    try:
+        db.close()
+    except Exception:
+        pass
+    try:
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+    except Exception:
+        os._exit(0)
+
+@music.on_message(filters.command("backup", prefixes=PREFIX) & filters.user(OWNER_ID))
+async def backup_cmd(client, message):
+    import zipfile
+    os.makedirs("backups", exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    zp = os.path.join("backups", f"devx_backup_{ts}.zip")
+    try:
+        with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED) as z:
+            for fp in ([DB_PATH, SESSION_FILE] if os.path.exists(SESSION_FILE) else [DB_PATH]):
+                if os.path.exists(fp):
+                    z.write(fp)
+            log = os.path.join(LOGS_DIR, "bot.log")
+            if os.path.exists(log):
+                z.write(log)
+        await message.reply_document(zp, caption=f"📦 Backup: `{os.path.basename(zp)}`")
+    except Exception as e:
+        await message.reply_text(f"❌ Backup fail: `{e}`")
+
+@music.on_message(filters.command("clean", prefixes=PREFIX))
+async def clean_cmd(client, message):
+    if not is_core_admin(message.from_user.id):
+        await message.reply_text(f"❌ {stylish('Owner / core admin only')}.")
+        return
+    playing = set(current_files.values())
+    removed = 0
+    try:
+        for name in os.listdir(TEMP_DIR):
+            fp = os.path.join(TEMP_DIR, name)
+            if os.path.isfile(fp) and fp not in playing:
+                try:
+                    os.remove(fp)
+                    removed += 1
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    await message.reply_text(
+        f"🧹 『{BRAND}』 — {stylish('Temp cleaned')}: {removed} {stylish('files')}"
+    )
 
 @music.on_message(filters.command("ytupdate", prefixes=PREFIX) & filters.user(OWNER_ID))
 async def ytupdate_cmd(client, message):
-    """🔧 yt-dlp update — YouTube break hota rehta hai, purani version sabse
-    common reason hai 'searching karke atak jata hai' ka."""
     st = await message.reply_text("⬇️ yt-dlp update ho raha hai…")
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -4490,7 +2441,6 @@ async def eval_cmd(client, message):
 @music.on_message(filters.new_chat_members)
 @music.on_message(filters.service)
 async def rjoin_service_handler(client, message):
-    """🔁 .rjoin engine — group me call start/end hoti hai to yahan pata chalta hai."""
     if not vc_ready():
         return
     svc = getattr(message, "service", None)
@@ -4499,8 +2449,15 @@ async def rjoin_service_handler(client, message):
     chat_id = message.chat.id
     if chat_id > 0:
         return
-    if svc in _CHAT_ENDED:
-        # call khatam -> leave + clean (agli call pe fresh join hoga)
+    CHAT_STARTED = {
+        getattr(MessageServiceType, n) for n in ("VIDEO_CHAT_STARTED", "VOICE_CHAT_STARTED")
+        if getattr(MessageServiceType, n, None) is not None
+    }
+    CHAT_ENDED = {
+        getattr(MessageServiceType, n) for n in ("VIDEO_CHAT_ENDED", "VOICE_CHAT_ENDED")
+        if getattr(MessageServiceType, n, None) is not None
+    }
+    if svc in CHAT_ENDED:
         try:
             if chat_id in active_calls:
                 await vc.leave_call(chat_id)
@@ -4508,8 +2465,6 @@ async def rjoin_service_handler(client, message):
             pass
         active_calls.discard(chat_id)
         q = get_queue(chat_id)
-        # ✅ STABILITY: sirf rjoin wale songs clear karo —
-        # manual .play/.run wala queue/loop preserve rehta hai.
         if q.current is not None and q.current.get("rjoin"):
             q.current = None
             q.songs.clear()
@@ -4520,16 +2475,14 @@ async def rjoin_service_handler(client, message):
             PLAY_TIMERS.pop(chat_id, None)
             logger.info("rjoin: call ended in %s — cleaned", chat_id)
         return
-    if svc not in _CHAT_STARTED:
+    if svc not in CHAT_STARTED:
         return
     if get_rjoin_spec(chat_id) is None:
         return
-    # Rate-limit: 15 sec me sirf ek baar join (duplicate join rokna)
     _rj_now = time.time()
     if hasattr(rjoin_on_call_started, "_last_call"):
         _rj_last = rjoin_on_call_started._last_call.get(chat_id, 0)
         if _rj_now - _rj_last < 15:
-            logger.debug("rjoin: rate-limited for chat %s", chat_id)
             return
     else:
         rjoin_on_call_started._last_call = {}
@@ -4540,234 +2493,289 @@ async def rjoin_service_handler(client, message):
             await music.send_message(
                 chat_id,
                 f"🔁 『{BRAND}』 — {stylish('Auto-Joined!')}\n"
-                f"{stylish('Call start hui — bot join ho gaya')}"
-                + (f"\n🎵 {stylish('repeat playlist ON')} ({stylish('silent loop')})" if result == "playing" else ""),
+                f"{stylish('Call start hui — bot join ho gaya')}",
             )
         except Exception:
             pass
 
-async def greet(client, message):
-    for member in message.new_chat_members:
-        if member.is_self:
-            continue
-        db.add_user(member.id, member.username, member.first_name, member.last_name or "")
-        name = member.first_name or member.username or "there"
+async def rjoin_on_call_started(chat_id):
+    if not vc_ready():
+        return None
+    spec = get_rjoin_spec(chat_id)
+    if spec is None:
+        return None
+    _q = get_queue(chat_id)
+    if _q.current is not None or chat_id in active_calls:
+        return None
+    await asyncio.sleep(3)
+    joined = False
+    for attempt in range(6):
         try:
-            await message.reply_text(
-                f"🎉 Welcome **{name}** to the group!\n"
-                f"🎶 **{BOT_NAME}** — play music with the buttons below.",
-                reply_markup=main_menu(),
-            )
-        except Exception as e:
-            logger.error("Greet error: %s", e)
-
-@music.on_message(filters.text)
-async def awaiting_handler(client, message):
-    if (message.text or "").startswith(PREFIX):
-        return
-    key = (message.chat.id, message.from_user.id)
-
-    # 🔢 SEARCH NUMBER SELECTION — search ke baad reply karo:
-    #    `1` · `1,3,5` · `1-3` · `2,etc` · `all`  -> wahi numbers play honge
-    ls = last_search.get(key)
-    if ls and (time.time() - ls.get("ts", 0)) < 600:
-        spec = (message.text or "").strip()
-        if spec:
-            results = search_cache.get(ls.get("sid"))
-            if results:
-                try:
-                    if spec.lower() in ("all", "*", "etc"):
-                        indices = list(range(len(results)))
-                    else:
-                        indices = resolve_file_spec(spec, results) or []
-                except Exception:
-                    indices = []
-                if indices:
-                    last_search.pop(key, None)
-                    natural = ls.get("natural", False)
-                    started, queued, first = await _play_picked_songs(
-                        message, ls["sid"], indices, natural=natural)
-                    if started or queued:
-                        tag = "🎧 natural" if natural else "🎵"
-                        extra = f" +{queued - 1} more" if queued > 1 else ""
-                        await message.reply_text(
-                            f"✅ 『{BRAND}』 — {stylish('Selected')}: {queued} {tag}{extra}\n"
-                            f"🎵 {first}"
-                        )
-                    return
-
-    if key not in awaiting:
-        return
-    purpose = awaiting.pop(key)
-    if purpose == "play":
-        message.text = f"{PREFIX}play {message.text}"
-        message.command = message.text.split()
-        await play_cmd(client, message)
-    elif purpose == "voice":
-        await message.reply_text(f"🎤 Reply to a voice/audio/video and send `{PREFIX}run` (loop) or `{PREFIX}play`.")
-    elif purpose == "broadcast":
-        if not is_core_admin(message.from_user.id):
-            return
-        text = "📢 **𝐃𝐄𝐕 𝐗 𝐂𝐎𝐑𝐄 — Announcement**\n\n" + message.text
-        users = db.get_users()
-        ok = fail = 0
-        st = await message.reply_text("📢 Broadcasting…")
-        for u in users:
-            try:
-                await client.send_message(u[0], text)
-                ok += 1
-            except Exception:
-                fail += 1
-            await asyncio.sleep(0.05)
-        await st.edit_text(f"✅ Sent to {ok} users. Failed: {fail}", reply_markup=owner_panel())
-    elif purpose == "addadmin":
-        if message.from_user.id != OWNER_ID:
-            return
-        if not (message.text or "").strip().lstrip("-").isdigit():
-            await message.reply_text("❌ Valid User ID bhejo (digits).")
-            return
-        uid = int(message.text.strip())
-        add_core_admin(uid)
-        await message.reply_text(f"✅ 👑 `{uid}` ab **core admin** hai!\n\n" + core_admins_text())
-    elif purpose == "deladmin":
-        if message.from_user.id != OWNER_ID:
-            return
-        if not (message.text or "").strip().lstrip("-").isdigit():
-            await message.reply_text("❌ Valid User ID bhejo (digits).")
-            return
-        uid = int(message.text.strip())
-        if uid == OWNER_ID:
-            await message.reply_text("❌ Owner ko remove nahi kar sakte. 👑")
-            return
-        del_core_admin(uid)
-        await message.reply_text(f"🗑️ 👑 `{uid}` admin list se hata diya.\n\n" + core_admins_text())
-
-# ==================== SUPER FEATURES (v5) ====================
-# 🎤 .lyrics  📻 .radio  ⚡ .speed/.nightcore  🔊 .bass  ⏩ .seek
-# 🎵 .playlist  🚫 .gban  ♻️ .restart  📦 .backup  🧹 .clean
-# 🎬 .ytdl  💾 .save
-# ============================================================
-
-GBAN_KEY = "gbans"
-
-
-def get_gbans():
-    """Global banned users (owner kabhi ban nahi hota)."""
-    raw = db.get_config(GBAN_KEY, "") or ""
-    ids = {int(x) for x in raw.split(",") if x.strip().isdigit()}
-    ids.discard(OWNER_ID)
-    return ids
-
-
-def gban_user(uid):
-    ids = get_gbans()
-    ids.add(int(uid))
-    db.set_config(GBAN_KEY, ",".join(str(i) for i in sorted(ids)))
-
-
-def ungban_user(uid):
-    ids = get_gbans()
-    ids.discard(int(uid))
-    db.set_config(GBAN_KEY, ",".join(str(i) for i in sorted(ids)))
-
-
-def uid_gbanned(uid):
-    try:
-        return int(uid) in get_gbans()
-    except Exception:
-        return False
-
-
-# 📻 Live radio stations (community streams — aap apne URLs add kar sakte ho)
-RADIO_STATIONS = {
-    "1": {"name": "BBC World Service", "url": "http://stream.live.vc.bbcmedia.co.uk/bbc_world_service"},
-    "2": {"name": "Radio City Hindi", "url": "http://prclive1.listenon.in:9960/"},
-    "3": {"name": "Radio Mirchi", "url": "http://node-28.zeno.fm/8f4wk1f77gruv"},
-    "4": {"name": "SomaFM Groove Salad", "url": "https://ice1.somafm.com/groovesalad-256-mp3"},
-    "5": {"name": "Radio Paradise", "url": "https://stream.radioparadise.com/mp3-192"},
-    "6": {"name": "Lofi Radio", "url": "http://usa9.fastcast4u.com/proxy/jamz?mp=/1"},
-}
-
-
-# ------------------- 🎤 LYRICS -------------------
-@music.on_message(filters.command("lyrics", prefixes=PREFIX))
-async def lyrics_cmd(client, message):
-    """🎤 .lyrics <song> — gaane ke lyrics (Deezer resolve + lyrics.ovh)."""
-    query = _arg(message)
-    if not query and message.reply_to_message:
-        query = message.reply_to_message.text or ""
-    if not query:
-        await message.reply_text(
-            f"❌ {stylish('Usage')}: `.lyrics <song name>`\n"
-            f"💡 {stylish('Best')}: `.lyrics Artist - Song`"
-        )
-        return
-    st = await message.reply_text(f"🔎 『{BRAND}』 — {stylish('Lyrics dhoond raha hoon')}…")
-    artist, title = None, query.strip()
-    if " - " in query:
-        artist, title = [x.strip() for x in query.split(" - ", 1)]
-    else:
-        try:
-            hits = await _search_guard(deezer_search(query, limit=1), 12)
-            if hits:
-                artist = hits[0].get("uploader")
-                title = hits[0].get("title")
+            await vc.play(chat_id)
+            joined = True
+            break
+        except NoActiveGroupCall:
+            await asyncio.sleep(3)
         except Exception:
-            pass
-    if not artist:
-        await st.edit_text(
-            f"❌ {stylish('Artist nahi mila')}.\n"
-            f"💡 `.lyrics Artist - Song` {stylish('format use karo')}."
-        )
-        return
-    url = ("https://api.lyrics.ovh/v1/"
-           f"{aiohttp.helpers.quote(artist, safe='')}/"
-           f"{aiohttp.helpers.quote(title, safe='')}")
-    try:
-        timeout = aiohttp.ClientTimeout(total=20)
-        async with aiohttp.ClientSession() as s:
-            async with s.get(url, timeout=timeout) as r:
-                data = await r.json(content_type=None)
-        lyr = (data or {}).get("lyrics")
-        if not lyr:
-            await st.edit_text(f"❌ {stylish('Lyrics nahi mile')} — try: `.lyrics Artist - Song`")
-            return
-        msg = f"🎤 **{artist} — {title}**\n\n{lyr.strip()}"
-        chunks, cur = [], ""
-        for ln in msg.split("\n"):
-            if len(cur) + len(ln) + 1 > 3900:
-                chunks.append(cur)
-                cur = ln
-            else:
-                cur += ln + "\n"
-        if cur:
-            chunks.append(cur)
-        await st.edit_text(chunks[0])
-        for c in chunks[1:]:
-            await message.reply_text(c)
-    except Exception as e:
-        await st.edit_text(f"❌ Lyrics fail: `{e}`")
+            await asyncio.sleep(3)
+    if not joined:
+        return None
+    active_calls.add(chat_id)
+    if spec == "join":
+        return "joined"
+    return "joined"
 
-
-# ------------------- 📻 RADIO -------------------
-@music.on_message(filters.command("radio", prefixes=PREFIX))
+@music.on_message(filters.command("play", prefixes=PREFIX))
 @needs_vc
-async def radio_cmd(client, message):
-    """📻 .radio — live radio play karo (direct stream, koi download nahi)."""
+async def play_cmd(client, message):
     chat_id = message.chat.id
+    q = get_queue(chat_id)
+
     if not await can_control(client, chat_id, message.from_user.id):
         await _deny_reply(message)
         return
-    arg = _arg(message)
-    if not arg:
-        body = "\n".join(
-            f"  `{n}.` 📻 {s['name']}" for n, s in RADIO_STATIONS.items())
-        body += "\n\n  🎵 `.radio 1` — {stylish('play karo')}\n  🚫 `.radio off` — {stylish('band')}"
-        await message.reply_text(core_card("live radio 📻", body, stylish("radio streams")))
+
+    if message.reply_to_message:
+        path = await download_reply_media(message)
+        if path:
+            song = {
+                "title": os.path.basename(path),
+                "duration": 0,
+                "uploader": "DEV X MUSIC",
+                "local_path": path,
+                "source": "local",
+                "temp": True,
+            }
+            db.bump("total_voice")
+            q.songs.append(song)
+            _sync_play_loop(q)
+            if not q.current:
+                q.current = q.songs.popleft()
+                active_calls.add(chat_id)
+                await play_song(chat_id, q.current)
+            else:
+                await message.reply_text(f"✅ Queued: **{song['title']}**")
+            return
+
+    if len(message.command) < 2:
+        await message.reply_text(
+            f"❌ Please provide a song name or URL.\nExample: `{PREFIX}play despacito`",
+            reply_markup=main_menu(),
+        )
         return
-    if arg.lower() in ("off", "stop", "0"):
-        q = get_queue(chat_id)
-        q.songs.clear()
+
+    query = " ".join(message.command[1:])
+    st = await message.reply_text(f"🔎 『{BRAND}』 — {stylish('Searching')}…")
+
+    if is_url(query):
+        if "open.spotify.com" in query:
+            try:
+                sp = await spotify_expand(query)
+            except RuntimeError:
+                await st.delete()
+                await message.reply_text(spotify_setup_help())
+                return
+            if not sp:
+                await st.delete()
+                await message.reply_text("❌ Spotify link se tracks nahi mile.")
+                return
+            await st.delete()
+            await _queue_songs(message, sp, natural=False, label="🎵 playlist")
+            return
+        if "deezer.com" in query:
+            dz = await deezer_expand(query)
+            if not dz:
+                await st.delete()
+                await message.reply_text("❌ Deezer link se tracks nahi mile.")
+                return
+            await st.delete()
+            await _queue_songs(message, dz, natural=False, label="🎵 playlist")
+            return
+        song = await _search_guard(asyncio.to_thread(resolve_song, query), 25)
+        await st.delete()
+        if not song:
+            await message.reply_text("❌ Couldn't find that song.", reply_markup=main_menu())
+            return
+        if "soundcloud.com" in query:
+            song["source"] = "soundcloud"
+        q.songs.append(song)
+        _sync_play_loop(q)
+        if not q.current:
+            q.current = q.songs.popleft()
+            active_calls.add(chat_id)
+            await play_song(chat_id, q.current)
+        else:
+            await message.reply_text(
+                f"✅ 『{BRAND}』 — {stylish('Added')}:\n"
+                f"🎵 {song['title']}\n⏱️ {fmt_duration(song['duration'])} — {stylish('Position')} {len(q.songs)}",
+                reply_markup=player_panel(q),
+            )
+        return
+
+    saavn_results, yt_results, sc_results, sp_results, dz_results = await asyncio.gather(
+        _search_guard(saavn_search(query, limit=4), 15),
+        _search_guard(asyncio.to_thread(resolve_songs, query, 4), 15),
+        _search_guard(asyncio.to_thread(soundcloud_search, query, 2), 15),
+        _search_guard(spotify_search(query, 3), 12),
+        _search_guard(deezer_search(query, 3), 12),
+    )
+    await st.delete()
+    results = (saavn_results or []) + (yt_results or []) + (sc_results or []) + (sp_results or []) + (dz_results or [])
+    if not results:
+        await message.reply_text("❌ No results found.", reply_markup=main_menu())
+        return
+
+    search_seq[0] += 1
+    sid = search_seq[0]
+    search_cache[sid] = results
+    last_search[(chat_id, message.from_user.id)] = {"sid": sid, "natural": False, "ts": time.time()}
+
+    text = search_results_text(results, query, natural=False)
+    buttons = []
+    for i, s in enumerate(results):
+        tag = SOURCE_TAG.get(s.get("source"), "🎵")
+        label = s['title'][:25]
+        buttons.append([InlineKeyboardButton(
+            f"{i+1}. {tag} {label}", callback_data=f"cb_pick_{sid}_{i}"
+        )])
+    buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="cb_cancel")])
+    await message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons))
+
+@music.on_message(filters.command("nplay", prefixes=PREFIX))
+@needs_vc
+async def nplay_cmd(client, message):
+    chat_id = message.chat.id
+    q = get_queue(chat_id)
+
+    if not await can_control(client, chat_id, message.from_user.id):
+        await _deny_reply(message)
+        return
+
+    if message.reply_to_message:
+        path = await download_reply_media(message)
+        if path:
+            song = {
+                "title": os.path.basename(path),
+                "duration": 0,
+                "uploader": "DEV X CORE",
+                "local_path": path,
+                "source": "local",
+                "normal": True,
+            }
+            db.bump("total_voice")
+            q.songs.append(song)
+            _sync_play_loop(q)
+            if not q.current:
+                q.current = q.songs.popleft()
+                active_calls.add(chat_id)
+                await play_song(chat_id, q.current)
+            else:
+                await message.reply_text(f"✅ Queued (natural 🎧): **{song['title']}**")
+            return
+
+    if len(message.command) < 2:
+        await message.reply_text(
+            f"❌ Song name ya URL do.\n"
+            f"Example: `{PREFIX}nplay despacito`\n\n"
+            f"🎧 {stylish('Natural sound')} — {stylish('no boost, no echo, no extra gain')}",
+            reply_markup=main_menu(),
+        )
+        return
+
+    query = " ".join(message.command[1:])
+    st = await message.reply_text(f"🔎 『{BRAND}』 — {stylish('Searching natural')}…")
+
+    if is_url(query):
+        if "open.spotify.com" in query:
+            try:
+                sp = await spotify_expand(query)
+            except RuntimeError:
+                await st.delete()
+                await message.reply_text(spotify_setup_help())
+                return
+            if not sp:
+                await st.delete()
+                await message.reply_text("❌ Spotify link se tracks nahi mile.")
+                return
+            await st.delete()
+            await _queue_songs(message, sp, natural=True, label="🎧 playlist")
+            return
+        if "deezer.com" in query:
+            dz = await deezer_expand(query)
+            if not dz:
+                await st.delete()
+                await message.reply_text("❌ Deezer link se tracks nahi mile.")
+                return
+            await st.delete()
+            await _queue_songs(message, dz, natural=True, label="🎧 playlist")
+            return
+        song = await _search_guard(asyncio.to_thread(resolve_song, query), 25)
+        await st.delete()
+        if not song:
+            await message.reply_text("❌ Couldn't find that song.", reply_markup=main_menu())
+            return
+        if "soundcloud.com" in query:
+            song["source"] = "soundcloud"
+        song["normal"] = True
+        q.songs.append(song)
+        _sync_play_loop(q)
+        if not q.current:
+            q.current = q.songs.popleft()
+            active_calls.add(chat_id)
+            await play_song(chat_id, q.current)
+        else:
+            await message.reply_text(
+                f"✅ 『{BRAND}』 — {stylish('Added (natural)')}:\n"
+                f"🎵 {song['title']}\n⏱️ {fmt_duration(song['duration'])} — {stylish('Position')} {len(q.songs)}",
+                reply_markup=player_panel(q),
+            )
+        return
+
+    saavn_results, yt_results, sc_results, sp_results, dz_results = await asyncio.gather(
+        _search_guard(saavn_search(query, limit=4), 15),
+        _search_guard(asyncio.to_thread(resolve_songs, query, 4), 15),
+        _search_guard(asyncio.to_thread(soundcloud_search, query, 2), 15),
+        _search_guard(spotify_search(query, 3), 12),
+        _search_guard(deezer_search(query, 3), 12),
+    )
+    await st.delete()
+    results = (saavn_results or []) + (yt_results or []) + (sc_results or []) + (sp_results or []) + (dz_results or [])
+    if not results:
+        await message.reply_text("❌ No results found.", reply_markup=main_menu())
+        return
+
+    search_seq[0] += 1
+    sid = search_seq[0]
+    search_cache[sid] = results
+    last_search[(chat_id, message.from_user.id)] = {"sid": sid, "natural": True, "ts": time.time()}
+
+    text = search_results_text(results, query, natural=True)
+    buttons = []
+    for i, s in enumerate(results):
+        tag = SOURCE_TAG.get(s.get("source"), "🎵")
+        label = s['title'][:25]
+        buttons.append([InlineKeyboardButton(
+            f"{i+1}. {tag} {label}", callback_data=f"cb_npick_{sid}_{i}"
+        )])
+    buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="cb_cancel")])
+    await message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons))
+
+@music.on_message(filters.command("skip", prefixes=PREFIX))
+@needs_vc
+async def skip_cmd(client, message):
+    chat_id = message.chat.id
+    q = get_queue(chat_id)
+    if not await can_control(client, chat_id, message.from_user.id):
+        await _deny_reply(message)
+        return
+    if q.songs:
+        old = q.current
+        q.current = q.songs.popleft()
+        await play_song(chat_id, q.current)
+        if old is not None:
+            _delete_temp_song_files(old)
+        await message.reply_text("⏭️ Skipped! 🎶")
+    else:
         old = q.current
         q.current = None
         if old is not None:
@@ -4777,1033 +2785,139 @@ async def radio_cmd(client, message):
         except Exception:
             pass
         active_calls.discard(chat_id)
-        PLAY_TIMERS.pop(chat_id, None)
-        await message.reply_text(f"📻 {stylish('Radio band')}.")
+        await message.reply_text("⏭️ Skipped. Queue empty — stopped.")
+
+@music.on_message(filters.command("pause", prefixes=PREFIX))
+@needs_vc
+async def pause_cmd(client, message):
+    if not await can_control(client, message.chat.id, message.from_user.id):
+        await _deny_reply(message)
         return
-    stn = RADIO_STATIONS.get(arg.split()[0])
-    if not stn:
-        await message.reply_text(f"❌ {stylish('Invalid station')}. `.radio` {stylish('se list dekho')}.")
+    try:
+        await vc.pause(message.chat.id)
+        _pause_timer(message.chat.id)
+        await message.reply_text("⏸️ Paused.")
+    except Exception:
+        await message.reply_text("❌ Nothing is playing.")
+
+@music.on_message(filters.command("resume", prefixes=PREFIX))
+@needs_vc
+async def resume_cmd(client, message):
+    if not await can_control(client, message.chat.id, message.from_user.id):
+        await _deny_reply(message)
         return
-    song = {
-        "title": f"📻 {stn['name']}",
-        "duration": 0,
-        "uploader": "Live Radio",
-        "direct_url": stn["url"],
-        "source": "radio",
-        "normal": True,
-    }
+    try:
+        await vc.resume(message.chat.id)
+        _resume_timer(message.chat.id)
+        await message.reply_text("▶️ Resumed.")
+    except Exception:
+        await message.reply_text("❌ Nothing is paused.")
+
+@music.on_message(filters.command("stop", prefixes=PREFIX))
+@needs_vc
+async def stop_cmd(client, message):
+    chat_id = message.chat.id
     q = get_queue(chat_id)
+    if not await can_control(client, chat_id, message.from_user.id):
+        await _deny_reply(message)
+        return
+    queued = list(q.songs)
     q.songs.clear()
-    q.current = song
+    old = q.current
+    q.current = None
     q.loop = False
     q.repeat = False
-    active_calls.add(chat_id)
+    q.silent_loop = False
+    active_calls.discard(chat_id)
+    current_files.pop(chat_id, None)
     err_notified.discard(chat_id)
-    ok = await play_song(chat_id, song, announce=True)
-    if not ok:
-        q.current = None
-        active_calls.discard(chat_id)
-
-
-# ------------------- ⚡ SPEED -------------------
-@music.on_message(filters.command("speed", prefixes=PREFIX))
-@needs_vc
-async def speed_cmd(client, message):
-    """⚡ .speed <0.5-2.5> — playback speed (pitch same rehta hai)."""
-    if not await can_control(client, message.chat.id, message.from_user.id):
-        await _deny_reply(message)
-        return
-    q = get_queue(message.chat.id)
-    arg = _arg(message)
-    if not arg:
+    replay_lock.discard(chat_id)
+    PLAY_TIMERS.pop(chat_id, None)
+    if old is not None:
+        _delete_temp_song_files(old)
+    for _s in queued:
+        _delete_temp_song_files(_s)
+    try:
+        await vc.leave_call(chat_id)
         await message.reply_text(
-            f"🎚️ Speed: `{q.speed}x`\n"
-            f"💡 `.speed 1.25` · `.speed 0.75` · `.speed 1.0` {stylish('(normal)')}"
-        )
-        return
-    try:
-        v = float(arg)
-        if not (0.5 <= v <= 2.5):
-            raise ValueError
-    except ValueError:
-        await message.reply_text(f"❌ {stylish('Speed')} 0.5–2.5 ({stylish('e.g.')} `.speed 1.25`).")
-        return
-    q.speed = v
-    q.nightcore = False
-    if q.current:
-        await reapply_current_effects(message.chat.id)
-    await message.reply_text(f"⚡ 『{BRAND}』 — Speed: `{v}x`")
-
-
-# ------------------- ⚡ NIGHTCORE -------------------
-@music.on_message(filters.command("nightcore", prefixes=PREFIX))
-@needs_vc
-async def nightcore_cmd(client, message):
-    """⚡ .nightcore — nightcore mode ON/OFF (fast + pitch up)."""
-    if not await can_control(client, message.chat.id, message.from_user.id):
-        await _deny_reply(message)
-        return
-    q = get_queue(message.chat.id)
-    q.nightcore = not q.nightcore
-    if q.nightcore:
-        q.speed = 1.0
-    state = "ON ⚡" if q.nightcore else "OFF"
-    if q.current:
-        await reapply_current_effects(message.chat.id)
-    await message.reply_text(f"⚡ 『{BRAND}』 — Nightcore: {state}")
-
-
-# ------------------- 🔊 BASS -------------------
-@music.on_message(filters.command("bass", prefixes=PREFIX))
-@needs_vc
-async def bass_cmd(client, message):
-    """🔊 .bass <0-100> — bass boost LEVEL (0-100 scale, g 0-20)."""
-    if not await can_control(client, message.chat.id, message.from_user.id):
-        await _deny_reply(message)
-        return
-    q = get_queue(message.chat.id)
-    arg = _arg(message).lower()
-    if arg in ("off", "0", "none", "reset"):
-        q.bass = 0
-    elif arg.replace(".", "", 1).isdigit():
-        q.bass = max(0, min(100, int(float(arg))))
-    else:
-        q.bass = 0 if q.bass > 0 else 50
-    if q.current:
-        await reapply_current_effects(message.chat.id)
-    await message.reply_text(
-        f"🔊 『{BRAND}』 — Bass boost: `{q.bass}%` (g={q.bass / 5:.1f})\n"
-        f"💡 `.bass 20` · `.bass 60` · `.bass off`"
-    )
-
-
-# ------------------- 🎼 TREBLE -------------------
-@music.on_message(filters.command("treble", prefixes=PREFIX))
-@needs_vc
-async def treble_cmd(client, message):
-    """🎼 .treble <0-100> — treble/highs boost level."""
-    if not await can_control(client, message.chat.id, message.from_user.id):
-        await _deny_reply(message)
-        return
-    q = get_queue(message.chat.id)
-    arg = _arg(message).lower()
-    if arg in ("off", "0", "none", "reset"):
-        q.treble = 0
-    elif arg.replace(".", "", 1).isdigit():
-        q.treble = max(0, min(100, int(float(arg))))
-    else:
-        q.treble = 0 if q.treble > 0 else 50
-    if q.current:
-        await reapply_current_effects(message.chat.id)
-    await message.reply_text(
-        f"🎼 『{BRAND}』 — Treble boost: `{q.treble}%`\n"
-        f"💡 `.treble 30` · `.treble 70` · `.treble off`"
-    )
-
-
-# ------------------- 🔊 SOUND PANEL -------------------
-@music.on_message(filters.command("sound", prefixes=PREFIX))
-async def sound_cmd(client, message):
-    """🔊 .sound — saare sound levels EK SAATH dikho (sab 0-100 scale)."""
-    q = get_queue(message.chat.id)
-    body = (
-        f"  🔊 {stylish('loud')}     `{q.loud_level}%`    .loud <0-100>\n"
-        f"  📢 {stylish('gain')}     `{q.gain_level}%`    .gain <0-100>\n"
-        f"  🚀 {stylish('boost')}    `{q.boost_level}%`   .boost <0-100>\n"
-        f"  🎤 {stylish('eco')}      `{q.eco_level}%`     .eco <0-100>\n"
-        f"  🔊 {stylish('bass')}     `{q.bass}%`     .bass <0-100>\n"
-        f"  🎼 {stylish('treble')}   `{q.treble}%`   .treble <0-100>\n"
-        f"  🎚️  {stylish('volume')}   `{q.volume}%`   .volume <0-200>\n"
-        f"  ⚡ {stylish('speed')}    `{q.speed}x`   .speed <0.5-2.5>\n"
-        f"  ⚡ {stylish('nightcore')} `{'ON' if q.nightcore else 'OFF'}`   .nightcore\n"
-        "\n"
-        f"  💯 {stylish('MAX LOUD')}: `.max` = {stylish('sab 100')} (Telegram limit) 🚀\n"
-        f"  {stylish('e.g.')} `.loud 100` `.bass 100` `.boost 100` `.mix 100`\n"
-        f"  `.mix <lvl>` = {stylish('sab ek saath')} · `.mix off` = {stylish('sab 0')}"
-    )
-    await message.reply_text(core_card("sound control 🔊", body, stylish(".max · .sound · .loud 100")))
-
-
-# ------------------- 💯 MAX LOUD (sab 100) -------------------
-@music.on_message(filters.command("max", prefixes=PREFIX))
-@needs_vc
-async def max_cmd(client, message):
-    """💯 .max — SAB effects 100 pe (Telegram max loud). .max off = sab 0."""
-    if not await can_control(client, message.chat.id, message.from_user.id):
-        await _deny_reply(message)
-        return
-    q = get_queue(message.chat.id)
-    arg = _arg(message).lower()
-    if arg in ("off", "0", "none", "reset"):
-        q.loud_level = q.gain_level = q.boost_level = q.eco_level = 0
-        q.bass = q.treble = 0
-        q.volume = 100
-        q.speed = 1.0
-        q.nightcore = False
-        label = "OFF (sab normal)"
-    else:
-        q.loud_level = q.gain_level = q.boost_level = q.eco_level = 100
-        q.bass = q.treble = 100
-        q.volume = 200
-        _vol_auto[message.chat.id] = False   # user ne max choose kiya
-        label = "MAX LOUD 💯 (Telegram limit)"
-    if q.current:
-        await reapply_current_effects(message.chat.id)
-    try:
-        if vc_ready():
-            await vc.change_volume_call(message.chat.id, q.volume)
-    except Exception:
-        pass
-    await message.reply_text(
-        f"💯 『{BRAND}』 — {stylish(label)}\n"
-        f"🔊 {stylish('loud')} 100 · 📢 {stylish('gain')} 100 · 🚀 {stylish('boost')} 100 · "
-        f"🎤 {stylish('eco')} 100\n"
-        f"🔊 {stylish('bass')} 100 · 🎼 {stylish('treble')} 100 · 🎚️ {stylish('volume')} 200\n"
-        f"💡 `.max off` — {stylish('sab normal')} · `.max` (reply me bhi chalta hai)"
-    )
-
-
-# ------------------- ⏩ SEEK -------------------
-@music.on_message(filters.command("seek", prefixes=PREFIX))
-@needs_vc
-async def seek_cmd(client, message):
-    """⏩ .seek +30 / -15 / 60 — current track me aage/peeche jao."""
-    if not await can_control(client, message.chat.id, message.from_user.id):
-        await _deny_reply(message)
-        return
-    chat_id = message.chat.id
-    q = get_queue(chat_id)
-    if not q.current:
-        await message.reply_text(f"❌ {stylish('Kuch play nahi ho raha')}.")
-        return
-    arg = _arg(message)
-    try:
-        delta = int(float(arg))
-    except (ValueError, TypeError):
-        await message.reply_text(f"❌ `.seek +30` · `.seek -15` · `.seek 60`")
-        return
-    cur = int(get_elapsed(chat_id))
-    pos = max(0, cur + delta)
-    dur = int(q.current.get("duration") or 0)
-    if dur and pos >= dur:
-        pos = max(0, dur - 2)
-    ok = await play_song(chat_id, q.current, announce=False, seek=pos)
-    await message.reply_text(
-        f"⏩ 『{BRAND}』 — {stylish('Seeked')}: `{fmt_duration(pos)}`"
-        if ok else f"❌ {stylish('Seek fail')}"
-    )
-
-
-# ------------------- 🎵 PLAYLIST (save/load) -------------------
-@music.on_message(filters.command("playlist", prefixes=PREFIX))
-@needs_vc
-async def playlist_cmd(client, message):
-    """🎵 .playlist save <name> / load <name> / del <name> — queue save/load."""
-    chat_id = message.chat.id
-    args = message.command[1:]
-    if not args:
-        rows = db.c.execute(
-            "SELECT name, created_at FROM playlists WHERE chat_id=? ORDER BY id DESC",
-            (chat_id,)).fetchall()
-        if not rows:
-            await message.reply_text(
-                f"📭 {stylish('No playlists')}.\n"
-                f"`.playlist save <name>` · `.playlist load <name>`"
-            )
-            return
-        body = "\n".join(f"  `{n + 1}.` 🎵 {nm}" for n, (nm, _ts) in enumerate(rows))
-        await message.reply_text(core_card("playlists", body, stylish(".playlist load <name>")))
-        return
-    action = args[0].lower()
-    q = get_queue(chat_id)
-    if action == "save":
-        if len(args) < 2:
-            await message.reply_text(f"❌ `.playlist save <name>`")
-            return
-        name = " ".join(args[1:])[:40]
-        songs = []
-        if q.current:
-            songs.append(q.current)
-        songs.extend(list(q.songs))
-        if not songs:
-            await message.reply_text(f"❌ {stylish('Queue khali hai')}.")
-            return
-        clean = []
-        for s in songs:
-            d = dict(s)
-            d.pop("temp", None)
-            d.pop("_file", None)
-            clean.append(d)
-        db.c.execute("DELETE FROM playlists WHERE name=? AND chat_id=?", (name, chat_id))
-        db.c.execute(
-            "INSERT INTO playlists (name, chat_id, songs, created_at) VALUES (?,?,?,?)",
-            (name, chat_id, json.dumps(clean), datetime.now().isoformat()))
-        db.conn.commit()
-        await message.reply_text(
-            f"✅ 『{BRAND}』 — {stylish('Playlist saved')}: `{name}` · {len(clean)} {stylish('tracks')}\n"
-            f"💡 `.playlist load {name}`"
-        )
-    elif action == "load":
-        if len(args) < 2:
-            await message.reply_text(f"❌ `.playlist load <name>`")
-            return
-        name = " ".join(args[1:])[:40]
-        row = db.c.execute(
-            "SELECT songs FROM playlists WHERE name=? AND chat_id=?",
-            (name, chat_id)).fetchone()
-        if not row:
-            await message.reply_text(f"❌ {stylish('Playlist')} `{name}` {stylish('nahi mili')}.")
-            return
-        try:
-            songs = json.loads(row[0])
-        except Exception:
-            songs = []
-        if not songs:
-            await message.reply_text(f"❌ {stylish('Playlist khali/corrupt hai')}.")
-            return
-        q.songs.clear()
-        for s in songs:
-            s.pop("temp", None)
-            s.pop("_file", None)
-            q.songs.append(s)
-        if not q.current:
-            q.current = q.songs.popleft()
-            active_calls.add(chat_id)
-            await play_song(chat_id, q.current)
-        await message.reply_text(
-            f"✅ 『{BRAND}』 — {stylish('Playlist loaded')}: `{name}` · {len(songs)} {stylish('tracks')}"
-        )
-    elif action in ("del", "delete", "rm"):
-        if len(args) < 2:
-            await message.reply_text(f"❌ `.playlist del <name>`")
-            return
-        name = " ".join(args[1:])[:40]
-        db.c.execute("DELETE FROM playlists WHERE name=? AND chat_id=?", (name, chat_id))
-        db.conn.commit()
-        await message.reply_text(f"🗑️ {stylish('Playlist')} `{name}` {stylish('deleted')}.")
-    else:
-        await message.reply_text(
-            f"❌ `.playlist save <name>` · `.playlist load <name>` · `.playlist del <name>`"
-        )
-
-
-# ------------------- 🚫 GBAN / UNGBAN / LIST -------------------
-@music.on_message(filters.command("gban", prefixes=PREFIX))
-async def gban_cmd(client, message):
-    """🚫 .gban <id|reply> — user ko globally ban (sirf OWNER)."""
-    if message.from_user.id != OWNER_ID:
-        await message.reply_text(f"❌ {stylish('Sirf OWNER')} 👑")
-        return
-    uid = None
-    if message.reply_to_message and message.reply_to_message.from_user:
-        uid = message.reply_to_message.from_user.id
-    elif _arg(message).lstrip("-").isdigit():
-        uid = int(_arg(message))
-    if not uid or uid == OWNER_ID:
-        await message.reply_text(f"❌ {stylish('Reply karo ya user id do')} ({stylish('owner ko nahi')}).")
-        return
-    gban_user(uid)
-    await message.reply_text(
-        f"🚫 『{BRAND}』 — {stylish('Global banned')}: `{uid}`\n"
-        f"{stylish('Ab wo bot use nahi kar sakta')}."
-    )
-
-
-@music.on_message(filters.command("ungban", prefixes=PREFIX))
-async def ungban_cmd(client, message):
-    """🚫 .ungban <id|reply> — gban hatao (sirf OWNER)."""
-    if message.from_user.id != OWNER_ID:
-        await message.reply_text(f"❌ {stylish('Sirf OWNER')} 👑")
-        return
-    uid = None
-    if message.reply_to_message and message.reply_to_message.from_user:
-        uid = message.reply_to_message.from_user.id
-    elif _arg(message).lstrip("-").isdigit():
-        uid = int(_arg(message))
-    if not uid:
-        await message.reply_text(f"❌ {stylish('Reply karo ya user id do')}.")
-        return
-    ungban_user(uid)
-    await message.reply_text(f"✅ 『{BRAND}』 — {stylish('Unbanned')}: `{uid}`")
-
-
-@music.on_message(filters.command("gbanlist", prefixes=PREFIX))
-async def gbanlist_cmd(client, message):
-    """🚫 .gbanlist — saare global bans."""
-    if not is_core_admin(message.from_user.id):
-        await message.reply_text(f"❌ {stylish('Owner / core admin only')}.")
-        return
-    ids = sorted(get_gbans())
-    if not ids:
-        await message.reply_text(f"📭 {stylish('Koi gban nahi')}.")
-        return
-    await message.reply_text(
-        "🚫 **Global Bans**\n━━━━━━━━━━━━━━━━━━━━━\n" +
-        "\n".join(f"• `{i}`" for i in ids)
-    )
-
-
-# ------------------- ♻️ RESTART -------------------
-@music.on_message(filters.command("restart", prefixes=PREFIX) & filters.user(OWNER_ID))
-async def restart_cmd(client, message):
-    """♻️ .restart — bot khud restart (systemd ke bina bhi kaam karta hai).
-    Session save hai to 2-5 sec me wapas online + music ready."""
-    try:
-        await message.reply_text(
-            f"♻️ 『{BRAND}』 — {stylish('Restarting')}…\n"
-            f"⏳ {stylish('2-5 sec me wapas online')} — `.ping` {stylish('se check karo')}"
+            "⏹️ Stopped & left the voice chat.\n"
         )
     except Exception:
-        pass
-    await asyncio.sleep(1)
-    try:
-        await music.stop()
-    except Exception:
-        pass
-    try:
-        await bot.stop()
-    except Exception:
-        pass
-    try:
-        db.close()
-    except Exception:
-        pass
-    # ✅ SELF-RESTART: yehi script dobara chalao — naya process, fresh start.
-    # systemd ho ya manual (`bash start.sh`) — dono me kaam karta hai.
-    try:
-        os.execv(sys.executable, [sys.executable] + sys.argv)
-    except Exception:
-        os._exit(0)
+        await message.reply_text("❌ Not in a voice chat.")
 
+# ==================== HELP / CMD PAGES ====================
+CMD_HELP = {
+    "play": ".play — 🎵 gaana search karke play",
+    "nplay": ".nplay — 🎧 natural sound (no effects)",
+    "pause": ".pause — pause playback",
+    "resume": ".resume — resume playback",
+    "skip": ".skip — skip current track",
+    "stop": ".stop — stop & leave voice chat",
+    "now": ".now — show now playing",
+    "queue": ".queue — show music queue",
+    "loop": ".loop — loop whole queue (ON/OFF)",
+    "repeat": ".repeat — repeat current track (ON/OFF)",
+    "boost": ".boost <0-100> — 🚀 ultra booster level",
+    "eco": ".eco <0-100> — 🎤 echo/reverb level",
+    "gain": ".gain <0-100> — 📢 gain/loudspeaker level",
+    "mix": ".mix <0-100> — ⚡ sab effects ek saath",
+    "loud": ".loud <0-100> — 🔊 loudspeaker level current song",
+    "treble": ".treble <0-100> — 🎼 treble/highs level",
+    "bass": ".bass <0-100> — 🔊 bass boost level",
+    "sound": ".sound — 🔊 saare sound levels ek saath dekho",
+    "max": ".max — 💯 SAB effects 100 (Telegram max loud)",
+    "volume": ".volume — volume panel / set volume",
+    "speed": ".speed <0.5-2.5> — ⚡ playback speed",
+    "nightcore": ".nightcore — ⚡ nightcore mode ON/OFF",
+    "seek": ".seek +30 / -15 — ⏩ current track me aage/peeche",
+    "menu": ".menu — main menu",
+    "panel": ".panel — player panel",
+    "stats": ".stats — bot stats",
+    "diag": ".diag — diagnose playback issues",
+    "admin": ".admin — reply karke us user ko core admin banao 👑",
+    "rm": ".rm <id|reply> — core admin remove (owner)",
+    "alist": ".alist — core admin list",
+    "public": ".public — 🌍 mood: group ke owner/admins bot chala sakte hain",
+    "private": ".private — 🔐 mood: sirf owner + core admins",
+    "lockmusic": ".lockmusic — lock controls to admins",
+    "unlockmusic": ".unlockmusic — unlock for everyone",
+    "gban": ".gban <id|reply> — 🚫 global ban (owner)",
+    "ungban": ".ungban <id|reply> — unban (owner)",
+    "gbanlist": ".gbanlist — saare global bans",
+    "broadcast": ".broadcast <text> — announcement to all users",
+    "ytupdate": ".ytupdate — 🔧 player update (owner)",
+    "clean": ".clean — 🧹 temp files clean (owner/core)",
+    "backup": ".backup — 📦 db+session backup zip (owner)",
+    "restart": ".restart — ♻️ bot restart (owner)",
+    "rjoin": ".rjoin — call pe auto-join",
+    "alive": ".alive — system card",
+    "ping": ".ping — latency",
+    "setname": ".setname — change account name",
+    "setbio": ".setbio — change bio",
+    "setpp": ".setpp — change profile photo",
+    "getpp": ".getpp — get profile photo",
+    "lyrics": ".lyrics <song> — 🎤 gaane ke lyrics",
+    "radio": ".radio — 📻 live radio",
+    "notesadd": ".notesadd title | body",
+    "noteslist": ".noteslist",
+    "notesdel": ".notesdel <id>",
+}
 
-# ------------------- 📦 BACKUP -------------------
-@music.on_message(filters.command("backup", prefixes=PREFIX) & filters.user(OWNER_ID))
-async def backup_cmd(client, message):
-    """📦 .backup — db + session + banner + logs ka zip bhej dega."""
-    import zipfile
-    os.makedirs("backups", exist_ok=True)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    zp = os.path.join("backups", f"devx_backup_{ts}.zip")
-    try:
-        with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED) as z:
-            for fp in ([DB_PATH, SESSION_FILE] if os.path.exists(SESSION_FILE) else [DB_PATH]):
-                if os.path.exists(fp):
-                    z.write(fp)
-            for name in os.listdir(BANNER_DIR):
-                fp = os.path.join(BANNER_DIR, name)
-                if os.path.isfile(fp):
-                    z.write(fp)
-            log = os.path.join(LOGS_DIR, "bot.log")
-            if os.path.exists(log):
-                z.write(log)
-        await message.reply_document(zp, caption=f"📦 Backup: `{os.path.basename(zp)}`")
-    except Exception as e:
-        await message.reply_text(f"❌ Backup fail: `{e}`")
-
-
-# ------------------- 🧹 CLEAN -------------------
-@music.on_message(filters.command("clean", prefixes=PREFIX))
-async def clean_cmd(client, message):
-    """🧹 .clean — temp files saaf karo (playing files safe rehte hain)."""
-    if not is_core_admin(message.from_user.id):
-        await message.reply_text(f"❌ {stylish('Owner / core admin only')}.")
-        return
-    playing = playing_paths()
-    prefixes = TEMP_PREFIXES + ("tts_", "qr_", "banner_src_")
-    removed = 0
-    try:
-        for name in os.listdir(TEMP_DIR):
-            fp = os.path.join(TEMP_DIR, name)
-            if os.path.isfile(fp) and fp not in playing and name.startswith(prefixes):
-                try:
-                    os.remove(fp)
-                    removed += 1
-                except Exception:
-                    pass
-    except Exception:
-        pass
-    await message.reply_text(
-        f"🧹 『{BRAND}』 — {stylish('Temp cleaned')}: {removed} {stylish('files')}\n"
-        f"📁 {stylish('Vault files safe hain')} — `.files`"
+def spotify_setup_help():
+    return (
+        f"🟢 『{BRAND}』 — {stylish('Spotify API Setup')}\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n"
+        f"{stylish('Free keys banao (2 min)')}:\n"
+        "1️⃣ https://developer.spotify.com/dashboard\n"
+        "2️⃣ Login → Create app (name: DEV X CORE)\n"
+        "3️⃣ App settings me Client ID + Client Secret milega\n"
+        "4️⃣ Server pe env set karke restart:\n"
+        "`export SPOTIFY_CLIENT_ID=your_id`\n"
+        "`export SPOTIFY_CLIENT_SECRET=your_secret`\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n"
+        f"{stylish('Bina keys ke bhi chalega')}: YouTube · Saavn · Deezer · SoundCloud"
     )
 
-
-# ------------------- 🎬 YTDL (video to vault) -------------------
-@music.on_message(filters.command("ytdl", prefixes=PREFIX))
-async def ytdl_cmd(client, message):
-    """🎬 .ytdl <url> — YouTube video vault me save (720p mp4)."""
-    if not is_core_admin(message.from_user.id):
-        await message.reply_text(f"❌ {stylish('Owner / core admin only')}.")
-        return
-    url = _arg(message)
-    if not url:
-        await message.reply_text(
-            f"❌ {stylish('Usage')}: `.ytdl <youtube url>`\n"
-            f"🎬 {stylish('Video vault me save hoga (720p)')} — `.run` {stylish('se loop kar sakte ho')}"
-        )
-        return
-    st = await message.reply_text(f"🎬 『{BRAND}』 — {stylish('Downloading video')}…")
-    try:
-        local = await asyncio.to_thread(download_youtube_video, url)
-        register_saved_file(local, os.path.basename(local), "youtube", message.chat.id)
-        await st.edit_text(
-            f"✅ 『{BRAND}』 — {stylish('Video saved to vault')}!\n"
-            f"💾 `{os.path.basename(local)}`\n"
-            f"📁 `.files` {stylish('me dekho')}"
-        )
-    except Exception as e:
-        await st.edit_text(f"❌ Download fail: `{e}`")
-
-
-# ------------------- 💾 SAVE (vault) -------------------
-@music.on_message(filters.command("save", prefixes=PREFIX))
-async def save_cmd(client, message):
-    """💾 .save <song|url|reply> — gaana vault me save (play nahi hota)."""
-    if not is_core_admin(message.from_user.id):
-        await message.reply_text(f"❌ {stylish('Owner / core admin only')}.")
-        return
-    if message.reply_to_message:
-        st = await message.reply_text(f"💾 『{BRAND}』 — {stylish('Saving media')}…")
-        path = await download_reply_media(message)
-        if not path:
-            await st.edit_text(f"❌ {stylish('Reply me audio/video nahi hai')}.")
-            return
-        await st.edit_text(
-            f"✅ 『{BRAND}』 — {stylish('Saved to Vault')}!\n"
-            f"💾 `{os.path.basename(path)}`"
-        )
-        return
-    query = _arg(message)
-    if not query:
-        await message.reply_text(
-            f"💾 {stylish('Usage')}:\n"
-            f"`.save <song name>` — {stylish('search karke save')}\n"
-            f"`.save <url>` — {stylish('url se save')}\n"
-            f"`.save` (reply media) — {stylish('replied media save')}"
-        )
-        return
-    st = await message.reply_text(f"💾 『{BRAND}』 — {stylish('Downloading for save')}…")
-    try:
-        title = None
-        local = None
-        src = "youtube"
-        # 1) pehle direct Saavn stream (fast)
-        try:
-            hits = await _search_guard(saavn_search(query, limit=1), 15)
-            if hits and hits[0].get("direct_url"):
-                local = await asyncio.wait_for(download_saavn_file(hits[0]["direct_url"]), timeout=120)
-                title = hits[0].get("title") or query
-                src = "saavn"
-        except Exception:
-            pass
-        # 2) nahi to 1000% fallback (yt-dlp → Invidious → Saavn)
-        if not local:
-            if not is_url(query):
-                info = await _search_guard(asyncio.to_thread(resolve_song, query), 25)
-                qurl = info.get("webpage_url") if info else query
-                title = (info or {}).get("title") or title or query
-            else:
-                qurl = query
-            local, via = await _fetch_youtube_audio(qurl, title or query, message.chat.id)
-            src = via
-        ext = os.path.splitext(local)[1] or ".m4a"
-        dest = os.path.join(TEMP_DIR, f"saved_{uuid.uuid4().hex}{ext}")
-        os.replace(local, dest)
-        register_saved_file(dest, title or os.path.basename(dest), src, message.chat.id)
-        await st.edit_text(
-            f"✅ 『{BRAND}』 — {stylish('Saved to Vault')}!\n"
-            f"💾 `{title or os.path.basename(dest)}`\n"
-            f"📁 `.files` {stylish('me dekho')} — `.run` {stylish('se loop')}"
-        )
-    except Exception as e:
-        await st.edit_text(f"❌ Save fail: `{e}`")
-
-# ==================== CALLBACK HANDLER ====================
-@music.on_callback_query()
-async def cb_handler(client, cb: CallbackQuery):
-    data = cb.data
-    chat_id = cb.message.chat.id
-    q = get_queue(chat_id)
-    await cb.answer()
-
-    # ---- help command buttons (show description) ----
-    if data.startswith("hcmd_"):
-        cmd = data[5:]
-        desc = CMD_HELP.get(cmd, "")
-        await cb.answer(desc or "Unknown command", show_alert=True)
-        return
-
-    if data.startswith("cb_pick_"):
-        _, _, sid, idx = data.split("_")
-        results = search_cache.get(int(sid))
-        if not results:
-            await cb.answer("❌ Session expired. Search again.", show_alert=True)
-            return
-        try:
-            song = results[int(idx)]
-        except (IndexError, ValueError):
-            await cb.answer("❌ Invalid selection. Search again.", show_alert=True)
-            return
-        if not await can_control(client, chat_id, cb.from_user.id):
-            await _deny_answer(cb)
-            return
-        q.songs.append(song)
-        _sync_play_loop(q)   # 🔁 picked song(s) loop me chalein
-        if not q.current:
-            q.current = q.songs.popleft()
-            active_calls.add(chat_id)
-            ok = await play_song(chat_id, q.current)
-            if not ok:
-                # [FIX] play fail -> user ko selection ke paas hi batao (silent nahi)
-                q.current = None
-                try:
-                    await cb.message.edit_text(
-                        f"❌ 『{BRAND}』 — {stylish('Play nahi ho paya')}\n"
-                        f"{stylish('Voice chat check karo')} → `.diag`",
-                        reply_markup=main_menu(),
-                    )
-                except Exception:
-                    pass
-        else:
-            await cb.message.edit_text(
-                f"✅ **𝐃𝐄𝐕 𝐗 𝐂𝐎𝐑𝐄** — Added:\n🎵 {song['title']}\n"
-                f"⏱️ {fmt_duration(song['duration'])} — Position {len(q.songs)}",
-                reply_markup=player_panel(q),
-            )
-        return
-
-    if data.startswith("cb_npick_"):
-        _, _, sid, idx = data.split("_")
-        results = search_cache.get(int(sid))
-        if not results:
-            await cb.answer("❌ Session expired. Search again.", show_alert=True)
-            return
-        try:
-            song = results[int(idx)]
-        except (IndexError, ValueError):
-            await cb.answer("❌ Invalid selection. Search again.", show_alert=True)
-            return
-        if not await can_control(client, chat_id, cb.from_user.id):
-            await _deny_answer(cb)
-            return
-        song["normal"] = True  # 🎧 natural sound, no effects
-        q.songs.append(song)
-        _sync_play_loop(q)   # 🔁 picked song(s) loop me chalein
-        if not q.current:
-            q.current = q.songs.popleft()
-            active_calls.add(chat_id)
-            ok = await play_song(chat_id, q.current)
-            if not ok:
-                # [FIX] play fail -> user ko selection ke paas hi batao (silent nahi)
-                q.current = None
-                try:
-                    await cb.message.edit_text(
-                        f"❌ 『{BRAND}』 — {stylish('Play nahi ho paya')}\n"
-                        f"{stylish('Voice chat check karo')} → `.diag`",
-                        reply_markup=main_menu(),
-                    )
-                except Exception:
-                    pass
-        else:
-            await cb.message.edit_text(
-                f"✅ **𝐃𝐄𝐕 𝐗 𝐂𝐎𝐑𝐄** — Added (natural 🎧):\n🎵 {song['title']}\n"
-                f"⏱️ {fmt_duration(song['duration'])} — Position {len(q.songs)}",
-                reply_markup=player_panel(q),
-            )
-        return
-
-    if data.startswith("hpg_"):
-        # 📖 help pages — har page GIF banner ke sath attach
-        await _show_help_page(cb.message, data)
-        return
-
-    if data == "cb_cancel":
-        try:
-            await cb.message.edit_text("❌ Cancelled.", reply_markup=main_menu())
-        except Exception:
-            pass
-        return
-
-    if data.startswith("cb_qpage_"):
-        page = int(data.split("_")[-1])
-        text, kb = queue_panel(q, page=page)
-        try:
-            await cb.message.edit_text(text, reply_markup=kb)
-        except Exception:
-            pass
-        return
-
-    if data.startswith("cb_fpage_"):
-        if not is_core_admin(cb.from_user.id):
-            await cb.answer("❌ Owner / core admin only", show_alert=True)
-            return
-        page = int(data.split("_")[-1])
-        text, kb = files_list_text(page=page)
-        try:
-            await cb.message.edit_text(text, reply_markup=kb)
-        except Exception:
-            pass
-        return
-
-    if data == "cb_files":
-        if not is_core_admin(cb.from_user.id):
-            await cb.answer("❌ Owner / core admin only", show_alert=True)
-            return
-        text, kb = files_list_text(page=0)
-        await cb.message.reply_text(text, reply_markup=kb)
-        return
-
-    if data == "cb_delall":
-        if not is_core_admin(cb.from_user.id):
-            await cb.answer("❌ Owner / core admin only", show_alert=True)
-            return
-        deleted, skipped = delete_all_saved_files()
-        text, kb = files_list_text(page=0)
-        try:
-            await cb.message.edit_text(
-                f"🗑 {stylish('Deleted')} {deleted} · "
-                f"{stylish('Skipped playing')}: {skipped}\n\n{text}",
-                reply_markup=kb,
-            )
-        except Exception:
-            await cb.message.reply_text(
-                f"🗑 Deleted {deleted}. Skipped playing: {skipped}",
-                reply_markup=kb,
-            )
-        return
-
-    if data in CONTROL_CALLBACKS and not await can_control(client, chat_id, cb.from_user.id):
-        await _deny_answer(cb)
-        return
-
-    if data == "cb_play":
-        awaiting[(chat_id, cb.from_user.id)] = "play"
-        await cb.message.reply_text("▶️ **𝐃𝐄𝐕 𝐗 𝐂𝐎𝐑𝐄**\nSend me the song name or YouTube URL:")
-        return
-    if data == "cb_voice":
-        awaiting[(chat_id, cb.from_user.id)] = "voice"
-        await cb.message.reply_text(f"🎤 **{BOT_NAME}**\nReply to a voice/audio/video, then `{PREFIX}run` (loop) or `{PREFIX}play`.")
-        return
-    if data == "cb_panel":
-        await cb.message.reply_text(
-            core_card("player deck", stylish("transport  ·  loop  ·  boost  ·  volume")),
-            reply_markup=player_panel(q),
-        )
-        return
-    if data == "cb_menu":
-        await send_with_banner(cb.message, hub_home_text(), hub_keyboard())
-        return
-    if data.startswith("hub_"):
-        page = data[4:]
-        if page == "music":
-            await cb.message.reply_text(page_music_text(), reply_markup=hub_keyboard())
-        elif page == "files":
-            await cb.message.reply_text(page_files_text(), reply_markup=hub_keyboard())
-        elif page == "tools":
-            await cb.message.reply_text(page_tools_text(), reply_markup=hub_keyboard())
-        elif page == "fun":
-            await cb.message.reply_text(page_fun_text(), reply_markup=hub_keyboard())
-        elif page == "help":
-            await help_cmd(client, cb.message)
-        elif page == "alive":
-            await alive_cmd(client, cb.message)
-        elif page == "about":
-            await cb.message.reply_text(
-                core_card(
-                    "about",
-                    f"  {stylish('youtube + saavn + voice + video')}\n"
-                    f"  {stylish('silent loops  ·  vault  ·  tools')}\n"
-                    f"  {stylish('version')} `{CORE_VERSION}`\n"
-                    f"  {stylish('built as a single-file userbot')}",
-                    stylish("dev x core"),
-                ),
-                reply_markup=hub_keyboard(),
-            )
-        return
-    if data == "cb_about":
-        await cb.message.reply_text(
-            core_card(
-                "about",
-                f"  {stylish('youtube + saavn + voice + video')}\n"
-                f"  {stylish('silent loops  ·  vault  ·  tools')}\n"
-                f"  {stylish('version')} `{CORE_VERSION}`",
-            ),
-            reply_markup=hub_keyboard(),
-        )
-        return
-    if data == "cb_admin":
-        if not is_core_admin(cb.from_user.id):
-            await cb.answer("❌ Owner / core admin only", show_alert=True)
-            return
-        await cb.message.reply_text(page_admin_text(), reply_markup=owner_panel())
-        return
-    if data == "cb_addadmin":
-        if cb.from_user.id != OWNER_ID:
-            await cb.answer("❌ Sirf OWNER admin bana sakta hai 👑", show_alert=True)
-            return
-        awaiting[(chat_id, cb.from_user.id)] = "addadmin"
-        await cb.message.reply_text("👑 **Admin Add**\nUser ID bhejo (digits):")
-        return
-    if data == "cb_deladmin":
-        if cb.from_user.id != OWNER_ID:
-            await cb.answer("❌ Sirf OWNER admin hata sakta hai 👑", show_alert=True)
-            return
-        awaiting[(chat_id, cb.from_user.id)] = "deladmin"
-        await cb.message.reply_text("🗑️ **Admin Del**\nUser ID bhejo (digits):")
-        return
-    if data == "cb_adminlist":
-        if not is_core_admin(cb.from_user.id):
-            await cb.answer("❌ Owner / core admin only", show_alert=True)
-            return
-        await cb.message.reply_text(admin_list_card(), reply_markup=admin_list_kb())
-        return
-    if data.startswith("alist_del_"):
-        # 📋 list se direct delete — sirf OWNER
-        if cb.from_user.id != OWNER_ID:
-            await cb.answer("❌ Sirf OWNER delete kar sakta hai 👑", show_alert=True)
-            return
-        try:
-            uid = int(data.split("_")[-1])
-        except ValueError:
-            return
-        if uid == OWNER_ID:
-            await cb.answer("❌ Owner ko remove nahi kar sakte 👑", show_alert=True)
-            return
-        del_core_admin(uid)
-        try:
-            await cb.message.edit_text(admin_list_card(), reply_markup=admin_list_kb())
-        except Exception:
-            await cb.message.reply_text(admin_list_card(), reply_markup=admin_list_kb())
-        await cb.answer("🗑️ Removed from core admins", show_alert=True)
-        return
-    if data == "cb_users":
-        if not is_core_admin(cb.from_user.id):
-            await cb.answer("❌ Owner / core admin only", show_alert=True)
-            return
-        users = db.get_users(50)
-        text = "👥 **𝐃𝐄𝐕 𝐗 𝐂𝐎𝐑𝐄 — Users**\n━━━━━━━━━━━━━━━━━━━━━\n"
-        for u in users:
-            text += f"• `{u[0]}` @{u[1] or '—'}\n"
-        await cb.message.reply_text(text or "No users yet.", reply_markup=owner_panel())
-        return
-    if data == "cb_servers":
-        if not is_core_admin(cb.from_user.id):
-            await cb.answer("❌ Owner / core admin only", show_alert=True)
-            return
-        groups = []
-        async for d in client.get_dialogs():
-            if d.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
-                groups.append(f"• {d.chat.title} (`{d.chat.id}`)")
-        await cb.message.reply_text("🌐 **𝐃𝐄𝐕 𝐗 𝐂𝐎𝐑𝐄 — Groups**\n" + "\n".join(groups[:30] or ["No groups."]), reply_markup=owner_panel())
-        return
-    if data == "cb_broadcast":
-        if not is_core_admin(cb.from_user.id):
-            await cb.answer("❌ Owner / core admin only", show_alert=True)
-            return
-        awaiting[(chat_id, cb.from_user.id)] = "broadcast"
-        await cb.message.reply_text("📢 **𝐃𝐄𝐕 𝐗 𝐂𝐎𝐑𝐄**\nSend the broadcast message text (it will be sent to all users):")
-        return
-    if data == "cb_volume":
-        await cb.message.reply_text(f"🎚️ **𝐃𝐄𝐕 𝐗 𝐂𝐎𝐑𝐄 — Volume**\nCurrent: {fmt_vol(q.volume)}", reply_markup=volume_panel(q))
-        return
-    if data == "cb_lock":
-        if not await is_group_admin(client, chat_id, cb.from_user.id):
-            await cb.answer("❌ Group admins only", show_alert=True)
-            return
-        db.set_config(f"lock:{chat_id}", "1")
-        await _deny_answer(cb)
-        return
-    if data == "cb_unlock":
-        if not await is_group_admin(client, chat_id, cb.from_user.id):
-            await cb.answer("❌ Group admins only", show_alert=True)
-            return
-        db.set_config(f"lock:{chat_id}", "0")
-        await cb.answer("🔓 Unlocked", show_alert=True)
-        return
-
-    # [FIX] engine guards for the control buttons
-    if data in CONTROL_CALLBACKS and not vc_ready():
-        await cb.answer("❌ Voice engine not running — check /status", show_alert=True)
-        return
-
-    if data == "cb_pause":
-        try:
-            await vc.pause(chat_id); r = "⏸️ Paused"
-            _pause_timer(chat_id)
-        except Exception:
-            r = "❌ Nothing playing"
-    elif data == "cb_resume":
-        try:
-            await vc.resume(chat_id); r = "▶️ Resumed"
-            _resume_timer(chat_id)
-        except Exception:
-            r = "❌ Nothing paused"
-    elif data == "cb_skip":
-        if q.songs:
-            old = q.current
-            q.current = q.songs.popleft()
-            await play_song(chat_id, q.current)
-            if old is not None:
-                _delete_temp_song_files(old)
-            r = "⏭️ Skipped"
-        else:
-            old = q.current
-            q.current = None
-            if old is not None:
-                _delete_temp_song_files(old)
-            try:
-                await vc.leave_call(chat_id)
-            except Exception:
-                pass
-            active_calls.discard(chat_id)
-            PLAY_TIMERS.pop(chat_id, None)
-            r = "⏭️ Skipped (empty)"
-    elif data == "cb_stop":
-        old = q.current
-        queued = list(q.songs)
-        q.songs.clear(); q.current = None; q.loop = False; q.repeat = False
-        q.silent_loop = False
-        if old is not None:
-            _delete_temp_song_files(old)
-        for _s in queued:
-            _delete_temp_song_files(_s)
-        active_calls.discard(chat_id)
-        PLAY_TIMERS.pop(chat_id, None)
-        try:
-            await vc.leave_call(chat_id); r = "⏹️ Stopped"
-        except Exception:
-            r = "❌ Not in call"
-    elif data == "cb_loop":
-        q.loop = not q.loop
-        if q.loop:
-            q.repeat = False
-            q.silent_loop = True   # 🔁 loop cycles spam-free
-        else:
-            q.silent_loop = False
-        r = f"🔁 Loop {'ON' if q.loop else 'OFF'}"
-    elif data == "cb_repeat":
-        q.repeat = not q.repeat
-        if q.repeat:
-            q.loop = False
-            q.silent_loop = True   # 🔂 repeat spam-free
-        else:
-            q.silent_loop = False
-        # chalte gaane pe turant apply
-        if q.current:
-            await reapply_current_effects(chat_id)
-        r = f"🔂 Repeat {'ON' if q.repeat else 'OFF'}"
-    elif data == "cb_boost":
-        q.boost_level = 0 if q.boost_level > 0 else 100
-        # chalte gaane pe turant apply — high volume + gain turant lagta hai
-        if q.current:
-            await reapply_current_effects(chat_id)
-        r = f"🚀 Boost {q.boost_level}%"
-    elif data == "cb_volup":
-        q.volume = min(200, q.volume + 10)
-        _vol_auto[chat_id] = False
-        try:
-            await vc.change_volume_call(chat_id, q.volume)
-            _last_vol_applied[chat_id] = q.volume
-        except Exception:
-            pass
-        r = f"🔊 {fmt_vol(q.volume)}"
-    elif data == "cb_voldown":
-        q.volume = max(0, q.volume - 10)
-        _vol_auto[chat_id] = False
-        try:
-            await vc.change_volume_call(chat_id, q.volume)
-            _last_vol_applied[chat_id] = q.volume
-        except Exception:
-            pass
-        r = f"🔉 {fmt_vol(q.volume)}"
-    elif data == "cb_vol200":
-        q.volume = 200
-        _vol_auto[chat_id] = False   # user ne set kiya
-        try:
-            await vc.change_volume_call(chat_id, 200)
-            _last_vol_applied[chat_id] = 200
-        except Exception:
-            pass
-        r = "🔊 200%"
-    elif data == "cb_vol_10":
-        q.volume = 10
-        _vol_auto[chat_id] = False   # user ne set kiya
-        try:
-            await vc.change_volume_call(chat_id, 10)
-            _last_vol_applied[chat_id] = 10
-        except Exception:
-            pass
-        r = "🎚️ 10%"
-    elif data == "cb_vol_50":
-        q.volume = 50
-        _vol_auto[chat_id] = False   # user ne set kiya
-        try:
-            await vc.change_volume_call(chat_id, 50)
-            _last_vol_applied[chat_id] = 50
-        except Exception:
-            pass
-        r = "🎚️ 50%"
-    elif data == "cb_vol_100":
-        q.volume = 100
-        _vol_auto[chat_id] = False   # user ne set kiya
-        try:
-            await vc.change_volume_call(chat_id, 100)
-            _last_vol_applied[chat_id] = 100
-        except Exception:
-            pass
-        r = "🎚️ 100%"
-    elif data == "cb_vol_150":
-        q.volume = 150
-        _vol_auto[chat_id] = False   # user ne set kiya
-        try:
-            await vc.change_volume_call(chat_id, 150)
-            _last_vol_applied[chat_id] = 150
-        except Exception:
-            pass
-        r = "🎚️ 150%"
-    elif data == "cb_mute":
-        # 🔇 TOGGLE: pehli baar = mute, dobara = unmute.
-        # Auto-unmute NAHI hota — mute karte hi restart nahi hoga.
-        if _muted_state.get(chat_id):
-            try:
-                await vc.unmute(chat_id); r = "🔊 Unmuted"
-            except Exception:
-                r = "❌ Not in call"
-            _muted_state[chat_id] = False
-        else:
-            try:
-                await vc.mute(chat_id); r = "🔇 Muted"
-            except Exception:
-                r = "❌ Not in call"
-            _muted_state[chat_id] = True
-    elif data == "cb_sound":
-        await sound_cmd(client, cb.message)
-        return
-    elif data == "cb_queue":
-        text, kb = queue_panel(q, page=0)
-        await cb.message.reply_text(text, reply_markup=kb)
-        return
-    elif data == "cb_now":
-        await now_cmd(client, cb.message)
-        return
-    elif data == "cb_stats":
-        await stats_cmd(client, cb.message)
-        return
-    elif data == "cb_help":
-        await help_cmd(client, cb.message)
-        return
-    else:
-        return
-
-    try:
-        await cb.message.edit_text(
-            "🎛️ **𝐃𝐄𝐕 𝐗 𝐂𝐎𝐑𝐄 — Player Panel**\n" + r, reply_markup=player_panel(q)
-        )
-    except Exception:
-        pass
-
-
-# ==================== CORE USERBOT — ALIVE / TOOLS / FUN / ADMIN ====================
 JOKES = [
     "I told my Wi-Fi we needed space. Now it keeps dropping me.",
     "A SQL query walks into a bar, walks up to two tables and asks: can I join you?",
@@ -5845,14 +2959,13 @@ async def _target_user(client, message):
 
 @music.on_message(filters.command(["alive", "core"], prefixes=PREFIX))
 async def alive_cmd(client, message):
-    # [FIX] robust: ek hi get_me call, ping asli latency, koi bhi fail ho to crash nahi
     t0 = time.time()
     me = None
     try:
         me = getattr(client, "me", None)
         if me is None:
             me = await client.get_me()
-        _ = me.id  # object valid hai ya nahi
+        _ = me.id
     except Exception:
         try:
             me = await client.get_me()
@@ -5865,8 +2978,6 @@ async def alive_cmd(client, message):
         uname = me.first_name
     else:
         uname = "core"
-    sync_saved_files()
-    saved = db.get_files()
     body = (
         f"  💚 {stylish('status')}     **ONLINE**\n"
         f"  👤 {stylish('account')}    `{uname}`\n"
@@ -5875,13 +2986,11 @@ async def alive_cmd(client, message):
         f"  📦 {stylish('version')}    `{CORE_VERSION}`\n"
         f"  🎛️  {stylish('engine')}     `{'on' if music_started else 'off'}`\n"
         f"  📞 {stylish('live vc')}    `{len(active_calls)}`\n"
-        f"  📁 {stylish('vault')}      `{len(saved)}` files\n"
     )
-    await send_with_banner(message, core_card("alive", body, stylish("system nominal")), hub_keyboard())
+    await message.reply_text(core_card("alive", body, stylish("system nominal")), reply_markup=hub_keyboard())
 
 @music.on_message(filters.command("ping", prefixes=PREFIX))
 async def ping_cmd(client, message):
-    # [FIX] robust: reply/edit koi bhi fail ho to crash nahi
     t0 = time.time()
     try:
         msg = await message.reply_text("⌁")
@@ -6305,57 +3414,808 @@ async def demote_cmd(client, message):
     except Exception as e:
         await message.reply_text(f"❌ {e}")
 
+# ==================== RADIO ====================
+RADIO_STATIONS = {
+    "1": {"name": "BBC World Service", "url": "http://stream.live.vc.bbcmedia.co.uk/bbc_world_service"},
+    "2": {"name": "Radio City Hindi", "url": "http://prclive1.listenon.in:9960/"},
+    "3": {"name": "Radio Mirchi", "url": "http://node-28.zeno.fm/8f4wk1f77gruv"},
+    "4": {"name": "SomaFM Groove Salad", "url": "https://ice1.somafm.com/groovesalad-256-mp3"},
+    "5": {"name": "Radio Paradise", "url": "https://stream.radioparadise.com/mp3-192"},
+    "6": {"name": "Lofi Radio", "url": "http://usa9.fastcast4u.com/proxy/jamz?mp=/1"},
+}
+
+@music.on_message(filters.command("radio", prefixes=PREFIX))
+@needs_vc
+async def radio_cmd(client, message):
+    chat_id = message.chat.id
+    if not await can_control(client, chat_id, message.from_user.id):
+        await _deny_reply(message)
+        return
+    arg = _arg(message)
+    if not arg:
+        body = "\n".join(
+            f"  `{n}.` 📻 {s['name']}" for n, s in RADIO_STATIONS.items())
+        body += "\n\n  🎵 `.radio 1` — play karo\n  🚫 `.radio off` — band"
+        await message.reply_text(core_card("live radio 📻", body, stylish("radio streams")))
+        return
+    if arg.lower() in ("off", "stop", "0"):
+        q = get_queue(chat_id)
+        q.songs.clear()
+        old = q.current
+        q.current = None
+        if old is not None:
+            _delete_temp_song_files(old)
+        try:
+            await vc.leave_call(chat_id)
+        except Exception:
+            pass
+        active_calls.discard(chat_id)
+        PLAY_TIMERS.pop(chat_id, None)
+        await message.reply_text(f"📻 {stylish('Radio band')}.")
+        return
+    stn = RADIO_STATIONS.get(arg.split()[0])
+    if not stn:
+        await message.reply_text(f"❌ {stylish('Invalid station')}. `.radio` {stylish('se list dekho')}.")
+        return
+    song = {
+        "title": f"📻 {stn['name']}",
+        "duration": 0,
+        "uploader": "Live Radio",
+        "direct_url": stn["url"],
+        "source": "radio",
+        "normal": True,
+    }
+    q = get_queue(chat_id)
+    q.songs.clear()
+    q.current = song
+    q.loop = False
+    q.repeat = False
+    active_calls.add(chat_id)
+    err_notified.discard(chat_id)
+    ok = await play_song(chat_id, song, announce=True)
+    if not ok:
+        q.current = None
+        active_calls.discard(chat_id)
+
+@music.on_message(filters.command("sound", prefixes=PREFIX))
+async def sound_cmd(client, message):
+    q = get_queue(message.chat.id)
+    body = (
+        f"  🔊 {stylish('loud')}     `{q.loud_level}%`    .loud <0-100>\n"
+        f"  📢 {stylish('gain')}     `{q.gain_level}%`    .gain <0-100>\n"
+        f"  🚀 {stylish('boost')}    `{q.boost_level}%`   .boost <0-100>\n"
+        f"  🎤 {stylish('eco')}      `{q.eco_level}%`     .eco <0-100>\n"
+        f"  🔊 {stylish('bass')}     `{q.bass}%`     .bass <0-100>\n"
+        f"  🎼 {stylish('treble')}   `{q.treble}%`   .treble <0-100>\n"
+        f"  🎚️  {stylish('volume')}   `{q.volume}%`   .volume <0-200>\n"
+        f"  ⚡ {stylish('speed')}    `{q.speed}x`   .speed <0.5-2.5>\n"
+        f"  ⚡ {stylish('nightcore')} `{'ON' if q.nightcore else 'OFF'}`   .nightcore\n"
+        "\n"
+        f"  💯 {stylish('MAX LOUD')}: `.max` = {stylish('sab 100')} (Telegram limit) 🚀\n"
+        f"  {stylish('e.g.')} `.loud 100` `.bass 100` `.boost 100` `.mix 100`\n"
+        f"  `.mix <lvl>` = {stylish('sab ek saath')} · `.mix off` = {stylish('sab 0')}"
+    )
+    await message.reply_text(core_card("sound control 🔊", body, stylish(".max · .sound · .loud 100")))
+
+@music.on_message(filters.command("max", prefixes=PREFIX))
+@needs_vc
+async def max_cmd(client, message):
+    if not await can_control(client, message.chat.id, message.from_user.id):
+        await _deny_reply(message)
+        return
+    q = get_queue(message.chat.id)
+    arg = _arg(message).lower()
+    if arg in ("off", "0", "none", "reset"):
+        q.loud_level = q.gain_level = q.boost_level = q.eco_level = 0
+        q.bass = q.treble = 0
+        q.volume = 100
+        q.speed = 1.0
+        q.nightcore = False
+        label = "OFF (sab normal)"
+    else:
+        q.loud_level = q.gain_level = q.boost_level = q.eco_level = 100
+        q.bass = q.treble = 100
+        q.volume = 200
+        _vol_auto[message.chat.id] = False
+        label = "MAX LOUD 💯 (Telegram limit)"
+    if q.current:
+        await reapply_current_effects(message.chat.id)
+    try:
+        if vc_ready():
+            await vc.change_volume_call(message.chat.id, q.volume)
+    except Exception:
+        pass
+    await message.reply_text(
+        f"💯 『{BRAND}』 — {stylish(label)}\n"
+        f"🔊 {stylish('loud')} 100 · 📢 {stylish('gain')} 100 · 🚀 {stylish('boost')} 100 · "
+        f"🎤 {stylish('eco')} 100\n"
+        f"🔊 {stylish('bass')} 100 · 🎼 {stylish('treble')} 100 · 🎚️ {stylish('volume')} 200\n"
+        f"💡 `.max off` — {stylish('sab normal')} · `.max`"
+    )
+
+@music.on_message(filters.command("speed", prefixes=PREFIX))
+@needs_vc
+async def speed_cmd(client, message):
+    if not await can_control(client, message.chat.id, message.from_user.id):
+        await _deny_reply(message)
+        return
+    q = get_queue(message.chat.id)
+    arg = _arg(message)
+    if not arg:
+        await message.reply_text(
+            f"🎚️ Speed: `{q.speed}x`\n"
+            f"💡 `.speed 1.25` · `.speed 0.75` · `.speed 1.0` {stylish('(normal)')}"
+        )
+        return
+    try:
+        v = float(arg)
+        if not (0.5 <= v <= 2.5):
+            raise ValueError
+    except ValueError:
+        await message.reply_text(f"❌ {stylish('Speed')} 0.5–2.5 ({stylish('e.g.')} `.speed 1.25`).")
+        return
+    q.speed = v
+    q.nightcore = False
+    if q.current:
+        await reapply_current_effects(message.chat.id)
+    await message.reply_text(f"⚡ 『{BRAND}』 — Speed: `{v}x`")
+
+@music.on_message(filters.command("nightcore", prefixes=PREFIX))
+@needs_vc
+async def nightcore_cmd(client, message):
+    if not await can_control(client, message.chat.id, message.from_user.id):
+        await _deny_reply(message)
+        return
+    q = get_queue(message.chat.id)
+    q.nightcore = not q.nightcore
+    if q.nightcore:
+        q.speed = 1.0
+    state = "ON ⚡" if q.nightcore else "OFF"
+    if q.current:
+        await reapply_current_effects(message.chat.id)
+    await message.reply_text(f"⚡ 『{BRAND}』 — Nightcore: {state}")
+
+@music.on_message(filters.command("bass", prefixes=PREFIX))
+@needs_vc
+async def bass_cmd(client, message):
+    if not await can_control(client, message.chat.id, message.from_user.id):
+        await _deny_reply(message)
+        return
+    q = get_queue(message.chat.id)
+    arg = _arg(message).lower()
+    if arg in ("off", "0", "none", "reset"):
+        q.bass = 0
+    elif arg.replace(".", "", 1).isdigit():
+        q.bass = max(0, min(100, int(float(arg))))
+    else:
+        q.bass = 0 if q.bass > 0 else 50
+    if q.current:
+        await reapply_current_effects(message.chat.id)
+    await message.reply_text(
+        f"🔊 『{BRAND}』 — Bass boost: `{q.bass}%` (g={q.bass / 5:.1f})\n"
+        f"💡 `.bass 20` · `.bass 60` · `.bass off`"
+    )
+
+@music.on_message(filters.command("treble", prefixes=PREFIX))
+@needs_vc
+async def treble_cmd(client, message):
+    if not await can_control(client, message.chat.id, message.from_user.id):
+        await _deny_reply(message)
+        return
+    q = get_queue(message.chat.id)
+    arg = _arg(message).lower()
+    if arg in ("off", "0", "none", "reset"):
+        q.treble = 0
+    elif arg.replace(".", "", 1).isdigit():
+        q.treble = max(0, min(100, int(float(arg))))
+    else:
+        q.treble = 0 if q.treble > 0 else 50
+    if q.current:
+        await reapply_current_effects(message.chat.id)
+    await message.reply_text(
+        f"🎼 『{BRAND}』 — Treble boost: `{q.treble}%`\n"
+        f"💡 `.treble 30` · `.treble 70` · `.treble off`"
+    )
+
+@music.on_message(filters.command("seek", prefixes=PREFIX))
+@needs_vc
+async def seek_cmd(client, message):
+    if not await can_control(client, message.chat.id, message.from_user.id):
+        await _deny_reply(message)
+        return
+    chat_id = message.chat.id
+    q = get_queue(chat_id)
+    if not q.current:
+        await message.reply_text(f"❌ {stylish('Kuch play nahi ho raha')}.")
+        return
+    arg = _arg(message)
+    try:
+        delta = int(float(arg))
+    except (ValueError, TypeError):
+        await message.reply_text(f"❌ `.seek +30` · `.seek -15` · `.seek 60`")
+        return
+    cur = int(get_elapsed(chat_id))
+    pos = max(0, cur + delta)
+    dur = int(q.current.get("duration") or 0)
+    if dur and pos >= dur:
+        pos = max(0, dur - 2)
+    ok = await play_song(chat_id, q.current, announce=False, seek=pos)
+    await message.reply_text(
+        f"⏩ 『{BRAND}』 — {stylish('Seeked')}: `{fmt_duration(pos)}`"
+        if ok else f"❌ {stylish('Seek fail')}"
+    )
+
+# ==================== DOWNLOAD REPLY MEDIA ====================
+async def download_reply_media(message: Message):
+    r = message.reply_to_message
+    if r is None:
+        return None
+    media = None
+    ext = "bin"
+    title = None
+    if r.audio:
+        media, ext = r.audio, (r.audio.file_name or "audio.mp3").rsplit(".", 1)[-1]
+        title = getattr(r.audio, "title", None) or r.audio.file_name
+    elif r.voice:
+        media, ext = r.voice, "ogg"
+        title = "voice_note.ogg"
+    elif r.video:
+        media, ext = r.video, (r.video.file_name or "video.mp4").rsplit(".", 1)[-1]
+        title = r.video.file_name or "video.mp4"
+    elif r.video_note:
+        media, ext = r.video_note, "mp4"
+        title = "video_note.mp4"
+    elif r.document and (r.document.mime_type or "").startswith(("audio/", "video/")):
+        media, ext = r.document, (r.document.file_name or "doc.bin").rsplit(".", 1)[-1]
+        title = r.document.file_name
+    else:
+        return None
+    path = os.path.join(TEMP_DIR, f"{message.chat.id}_{message.id}.{ext}")
+    try:
+        await r.download(file_name=path)
+        return path
+    except Exception as e:
+        logger.error("Download error: %s", e)
+        return None
+
+# ==================== CALLBACK HANDLER ====================
+@music.on_callback_query()
+async def cb_handler(client, cb: CallbackQuery):
+    data = cb.data
+    chat_id = cb.message.chat.id
+    q = get_queue(chat_id)
+    await cb.answer()
+
+    if data.startswith("cb_pick_"):
+        _, _, sid, idx = data.split("_")
+        results = search_cache.get(int(sid))
+        if not results:
+            await cb.answer("❌ Session expired. Search again.", show_alert=True)
+            return
+        try:
+            song = results[int(idx)]
+        except (IndexError, ValueError):
+            await cb.answer("❌ Invalid selection. Search again.", show_alert=True)
+            return
+        if not await can_control(client, chat_id, cb.from_user.id):
+            await _deny_answer(cb)
+            return
+        q.songs.append(song)
+        _sync_play_loop(q)
+        if not q.current:
+            q.current = q.songs.popleft()
+            active_calls.add(chat_id)
+            ok = await play_song(chat_id, q.current)
+            if not ok:
+                q.current = None
+                try:
+                    await cb.message.edit_text(
+                        f"❌ 『{BRAND}』 — {stylish('Play nahi ho paya')}\n"
+                        f"{stylish('Voice chat check karo')} → `.diag`",
+                        reply_markup=main_menu(),
+                    )
+                except Exception:
+                    pass
+        else:
+            await cb.message.edit_text(
+                f"✅ **𝐃𝐄𝐕 𝐗 𝐂𝐎𝐑𝐄** — Added:\n🎵 {song['title']}\n"
+                f"⏱️ {fmt_duration(song['duration'])} — Position {len(q.songs)}",
+                reply_markup=player_panel(q),
+            )
+        return
+
+    if data.startswith("cb_npick_"):
+        _, _, sid, idx = data.split("_")
+        results = search_cache.get(int(sid))
+        if not results:
+            await cb.answer("❌ Session expired. Search again.", show_alert=True)
+            return
+        try:
+            song = results[int(idx)]
+        except (IndexError, ValueError):
+            await cb.answer("❌ Invalid selection. Search again.", show_alert=True)
+            return
+        if not await can_control(client, chat_id, cb.from_user.id):
+            await _deny_answer(cb)
+            return
+        song["normal"] = True
+        q.songs.append(song)
+        _sync_play_loop(q)
+        if not q.current:
+            q.current = q.songs.popleft()
+            active_calls.add(chat_id)
+            ok = await play_song(chat_id, q.current)
+            if not ok:
+                q.current = None
+                try:
+                    await cb.message.edit_text(
+                        f"❌ 『{BRAND}』 — {stylish('Play nahi ho paya')}\n"
+                        f"{stylish('Voice chat check karo')} → `.diag`",
+                        reply_markup=main_menu(),
+                    )
+                except Exception:
+                    pass
+        else:
+            await cb.message.edit_text(
+                f"✅ **𝐃𝐄𝐕 𝐗 𝐂𝐎𝐑𝐄** — Added (natural 🎧):\n🎵 {song['title']}\n"
+                f"⏱️ {fmt_duration(song['duration'])} — Position {len(q.songs)}",
+                reply_markup=player_panel(q),
+            )
+        return
+
+    if data == "cb_cancel":
+        try:
+            await cb.message.edit_text("❌ Cancelled.", reply_markup=main_menu())
+        except Exception:
+            pass
+        return
+
+    if data.startswith("cb_qpage_"):
+        page = int(data.split("_")[-1])
+        text, kb = queue_panel(q, page=page)
+        try:
+            await cb.message.edit_text(text, reply_markup=kb)
+        except Exception:
+            pass
+        return
+
+    if data == "cb_files":
+        await cb.answer("❌ Files system removed — use .play only", show_alert=True)
+        return
+
+    if data == "cb_delall":
+        await cb.answer("❌ Files system removed", show_alert=True)
+        return
+
+    if data in CONTROL_CALLBACKS if 'CONTROL_CALLBACKS' in globals() else False:
+        pass
+
+    CONTROL_CALLBACKS_LOCAL = {
+        "cb_pause", "cb_resume", "cb_skip", "cb_stop", "cb_loop",
+        "cb_repeat", "cb_boost", "cb_volup", "cb_voldown", "cb_play", "cb_voice",
+        "cb_mute", "cb_vol200", "cb_vol_10", "cb_vol_50", "cb_vol_100", "cb_vol_150",
+    }
+    if data in CONTROL_CALLBACKS_LOCAL and not await can_control(client, chat_id, cb.from_user.id):
+        await _deny_answer(cb)
+        return
+
+    if data == "cb_play":
+        awaiting[(chat_id, cb.from_user.id)] = "play"
+        await cb.message.reply_text("▶️ **𝐃𝐄𝐕 𝐗 𝐂𝐎𝐑𝐄**\nSend me the song name or YouTube URL:")
+        return
+    if data == "cb_voice":
+        awaiting[(chat_id, cb.from_user.id)] = "voice"
+        await cb.message.reply_text(f"🎤 **{BOT_NAME}**\nReply to a voice/audio/video, then `{PREFIX}run` (loop) or `{PREFIX}play`.")
+        return
+    if data == "cb_panel":
+        await cb.message.reply_text(
+            core_card("player deck", stylish("transport  ·  loop  ·  boost  ·  volume")),
+            reply_markup=player_panel(q),
+        )
+        return
+    if data == "cb_menu":
+        await cb.message.reply_text(hub_home_text(), reply_markup=hub_keyboard())
+        return
+    if data.startswith("hub_"):
+        page = data[4:]
+        if page == "music":
+            await cb.message.reply_text(page_music_text(), reply_markup=hub_keyboard())
+        elif page == "tools":
+            await cb.message.reply_text(page_tools_text(), reply_markup=hub_keyboard())
+        elif page == "fun":
+            await cb.message.reply_text(page_fun_text(), reply_markup=hub_keyboard())
+        elif page == "help":
+            await help_cmd(client, cb.message)
+        elif page == "alive":
+            await alive_cmd(client, cb.message)
+        elif page == "about":
+            await cb.message.reply_text(
+                core_card(
+                    "about",
+                    f"  {stylish('youtube + saavn + voice + video')}\n"
+                    f"  {stylish('simple song play bot')}\n"
+                    f"  {stylish('version')} `{CORE_VERSION}`",
+                ),
+                reply_markup=hub_keyboard(),
+            )
+        return
+    if data == "cb_about":
+        await cb.message.reply_text(
+            core_card(
+                "about",
+                f"  {stylish('youtube + saavn + voice + video')}\n"
+                f"  {stylish('simple song play bot')}\n"
+                f"  {stylish('version')} `{CORE_VERSION}`",
+            ),
+            reply_markup=hub_keyboard(),
+        )
+        return
+    if data == "cb_admin":
+        if not is_core_admin(cb.from_user.id):
+            await cb.answer("❌ Owner / core admin only", show_alert=True)
+            return
+        await cb.message.reply_text(page_admin_text(), reply_markup=owner_panel())
+        return
+    if data == "cb_addadmin":
+        if cb.from_user.id != OWNER_ID:
+            await cb.answer("❌ Sirf OWNER admin bana sakta hai 👑", show_alert=True)
+            return
+        awaiting[(chat_id, cb.from_user.id)] = "addadmin"
+        await cb.message.reply_text("👑 **Admin Add**\nUser ID bhejo (digits):")
+        return
+    if data == "cb_deladmin":
+        if cb.from_user.id != OWNER_ID:
+            await cb.answer("❌ Sirf OWNER admin hata sakta hai 👑", show_alert=True)
+            return
+        awaiting[(chat_id, cb.from_user.id)] = "deladmin"
+        await cb.message.reply_text("🗑️ **Admin Del**\nUser ID bhejo (digits):")
+        return
+    if data == "cb_adminlist":
+        if not is_core_admin(cb.from_user.id):
+            await cb.answer("❌ Owner / core admin only", show_alert=True)
+            return
+        await alist_cmd(client, cb.message)
+        return
+    if data == "cb_users":
+        if not is_core_admin(cb.from_user.id):
+            await cb.answer("❌ Owner / core admin only", show_alert=True)
+            return
+        await users_cmd(client, cb.message)
+        return
+    if data == "cb_servers":
+        if not is_core_admin(cb.from_user.id):
+            await cb.answer("❌ Owner / core admin only", show_alert=True)
+            return
+        await servers_cmd(client, cb.message)
+        return
+    if data == "cb_broadcast":
+        if not is_core_admin(cb.from_user.id):
+            await cb.answer("❌ Owner / core admin only", show_alert=True)
+            return
+        awaiting[(chat_id, cb.from_user.id)] = "broadcast"
+        await cb.message.reply_text("📢 **𝐃𝐄𝐕 𝐗 𝐂𝐎𝐑𝐄**\nSend the broadcast message text:")
+        return
+    if data == "cb_volume":
+        await cb.message.reply_text(f"🎚️ **𝐃𝐄𝐕 𝐗 𝐂𝐎𝐑𝐄 — Volume**\nCurrent: {fmt_vol(q.volume)}", reply_markup=volume_panel(q))
+        return
+    if data == "cb_lock":
+        if not await is_group_admin(client, chat_id, cb.from_user.id):
+            await cb.answer("❌ Group admins only", show_alert=True)
+            return
+        db.set_config(f"lock:{chat_id}", "1")
+        await _deny_answer(cb)
+        return
+    if data == "cb_unlock":
+        if not await is_group_admin(client, chat_id, cb.from_user.id):
+            await cb.answer("❌ Group admins only", show_alert=True)
+            return
+        db.set_config(f"lock:{chat_id}", "0")
+        await cb.answer("🔓 Unlocked", show_alert=True)
+        return
+
+    if data in CONTROL_CALLBACKS_LOCAL and not vc_ready():
+        await cb.answer("❌ Voice engine not running — check /status", show_alert=True)
+        return
+
+    if data == "cb_pause":
+        try:
+            await vc.pause(chat_id); r = "⏸️ Paused"
+            _pause_timer(chat_id)
+        except Exception:
+            r = "❌ Nothing playing"
+    elif data == "cb_resume":
+        try:
+            await vc.resume(chat_id); r = "▶️ Resumed"
+            _resume_timer(chat_id)
+        except Exception:
+            r = "❌ Nothing paused"
+    elif data == "cb_skip":
+        if q.songs:
+            old = q.current
+            q.current = q.songs.popleft()
+            await play_song(chat_id, q.current)
+            if old is not None:
+                _delete_temp_song_files(old)
+            r = "⏭️ Skipped"
+        else:
+            old = q.current
+            q.current = None
+            if old is not None:
+                _delete_temp_song_files(old)
+            try:
+                await vc.leave_call(chat_id)
+            except Exception:
+                pass
+            active_calls.discard(chat_id)
+            PLAY_TIMERS.pop(chat_id, None)
+            r = "⏭️ Skipped (empty)"
+    elif data == "cb_stop":
+        old = q.current
+        queued = list(q.songs)
+        q.songs.clear(); q.current = None; q.loop = False; q.repeat = False
+        q.silent_loop = False
+        if old is not None:
+            _delete_temp_song_files(old)
+        for _s in queued:
+            _delete_temp_song_files(_s)
+        active_calls.discard(chat_id)
+        PLAY_TIMERS.pop(chat_id, None)
+        try:
+            await vc.leave_call(chat_id); r = "⏹️ Stopped"
+        except Exception:
+            r = "❌ Not in call"
+    elif data == "cb_loop":
+        q.loop = not q.loop
+        if q.loop:
+            q.repeat = False
+            q.silent_loop = True
+        else:
+            q.silent_loop = False
+        r = f"🔁 Loop {'ON' if q.loop else 'OFF'}"
+    elif data == "cb_repeat":
+        q.repeat = not q.repeat
+        if q.repeat:
+            q.loop = False
+            q.silent_loop = True
+        else:
+            q.silent_loop = False
+        if q.current:
+            await reapply_current_effects(chat_id)
+        r = f"🔂 Repeat {'ON' if q.repeat else 'OFF'}"
+    elif data == "cb_boost":
+        q.boost_level = 0 if q.boost_level > 0 else 100
+        if q.current:
+            await reapply_current_effects(chat_id)
+        r = f"🚀 Boost {q.boost_level}%"
+    elif data == "cb_volup":
+        q.volume = min(200, q.volume + 10)
+        _vol_auto[chat_id] = False
+        try:
+            await vc.change_volume_call(chat_id, q.volume)
+            _last_vol_applied[chat_id] = q.volume
+        except Exception:
+            pass
+        r = f"🔊 {fmt_vol(q.volume)}"
+    elif data == "cb_voldown":
+        q.volume = max(0, q.volume - 10)
+        _vol_auto[chat_id] = False
+        try:
+            await vc.change_volume_call(chat_id, q.volume)
+            _last_vol_applied[chat_id] = q.volume
+        except Exception:
+            pass
+        r = f"🔉 {fmt_vol(q.volume)}"
+    elif data == "cb_vol200":
+        q.volume = 200
+        _vol_auto[chat_id] = False
+        try:
+            await vc.change_volume_call(chat_id, 200)
+            _last_vol_applied[chat_id] = 200
+        except Exception:
+            pass
+        r = "🔊 200%"
+    elif data == "cb_vol_10":
+        q.volume = 10
+        _vol_auto[chat_id] = False
+        try:
+            await vc.change_volume_call(chat_id, 10)
+            _last_vol_applied[chat_id] = 10
+        except Exception:
+            pass
+        r = "🎚️ 10%"
+    elif data == "cb_vol_50":
+        q.volume = 50
+        _vol_auto[chat_id] = False
+        try:
+            await vc.change_volume_call(chat_id, 50)
+            _last_vol_applied[chat_id] = 50
+        except Exception:
+            pass
+        r = "🎚️ 50%"
+    elif data == "cb_vol_100":
+        q.volume = 100
+        _vol_auto[chat_id] = False
+        try:
+            await vc.change_volume_call(chat_id, 100)
+            _last_vol_applied[chat_id] = 100
+        except Exception:
+            pass
+        r = "🎚️ 100%"
+    elif data == "cb_vol_150":
+        q.volume = 150
+        _vol_auto[chat_id] = False
+        try:
+            await vc.change_volume_call(chat_id, 150)
+            _last_vol_applied[chat_id] = 150
+        except Exception:
+            pass
+        r = "🎚️ 150%"
+    elif data == "cb_mute":
+        if _muted_state.get(chat_id):
+            try:
+                await vc.unmute(chat_id); r = "🔊 Unmuted"
+            except Exception:
+                r = "❌ Not in call"
+            _muted_state[chat_id] = False
+        else:
+            try:
+                await vc.mute(chat_id); r = "🔇 Muted"
+            except Exception:
+                r = "❌ Not in call"
+            _muted_state[chat_id] = True
+    elif data == "cb_sound":
+        await sound_cmd(client, cb.message)
+        return
+    elif data == "cb_queue":
+        text, kb = queue_panel(q, page=0)
+        await cb.message.reply_text(text, reply_markup=kb)
+        return
+    elif data == "cb_now":
+        await now_cmd(client, cb.message)
+        return
+    elif data == "cb_stats":
+        await stats_cmd(client, cb.message)
+        return
+    elif data == "cb_help":
+        await help_cmd(client, cb.message)
+        return
+    else:
+        return
+
+    try:
+        await cb.message.edit_text(
+            "🎛️ **𝐃𝐄𝐕 𝐗 𝐂𝐎𝐑𝐄 — Player Panel**\n" + r, reply_markup=player_panel(q)
+        )
+    except Exception:
+        pass
+
+# ==================== HELP CMD ====================
+@music.on_message(filters.command(["help", "cmds"], prefixes=PREFIX))
+async def help_cmd(client, message):
+    await _show_help_page(message)
+
+async def _show_help_page(message, page_key="hpg_music"):
+    text = page_music_text()
+    await message.reply_text(text, reply_markup=hub_keyboard())
+
+# ==================== AWAITING HANDLER ====================
+@music.on_message(filters.text)
+async def awaiting_handler(client, message):
+    if (message.text or "").startswith(PREFIX):
+        return
+    key = (message.chat.id, message.from_user.id)
+
+    ls = last_search.get(key)
+    if ls and (time.time() - ls.get("ts", 0)) < 600:
+        spec = (message.text or "").strip()
+        if spec:
+            results = search_cache.get(ls.get("sid"))
+            if results:
+                try:
+                    if spec.lower() in ("all", "*", "etc"):
+                        indices = list(range(len(results)))
+                    else:
+                        indices = [int(x) - 1 for x in spec.replace(" ", "").split(",") if x.strip().isdigit()]
+                        indices = [i for i in indices if 0 <= i < len(results)]
+                except Exception:
+                    indices = []
+                if indices:
+                    last_search.pop(key, None)
+                    natural = ls.get("natural", False)
+                    started, queued, first = await _play_picked_songs(
+                        message, ls["sid"], indices, natural=natural)
+                    if started or queued:
+                        tag = "🎧 natural" if natural else "🎵"
+                        extra = f" +{queued - 1} more" if queued > 1 else ""
+                        await message.reply_text(
+                            f"✅ 『{BRAND}』 — {stylish('Selected')}: {queued} {tag}{extra}\n"
+                            f"🎵 {first}"
+                        )
+                    return
+
+    if key not in awaiting:
+        return
+    purpose = awaiting.pop(key)
+    if purpose == "play":
+        message.text = f"{PREFIX}play {message.text}"
+        message.command = message.text.split()
+        await play_cmd(client, message)
+    elif purpose == "voice":
+        await message.reply_text(f"🎤 Reply to a voice/audio/video and send `{PREFIX}play`.")
+    elif purpose == "broadcast":
+        if not is_core_admin(message.from_user.id):
+            return
+        text = "📢 **𝐃𝐄𝐕 𝐗 𝐂𝐎𝐑𝐄 — Announcement**\n\n" + message.text
+        users = db.get_users()
+        ok = fail = 0
+        st = await message.reply_text("📢 Broadcasting…")
+        for u in users:
+            try:
+                await client.send_message(u[0], text)
+                ok += 1
+            except Exception:
+                fail += 1
+            await asyncio.sleep(0.05)
+        await st.edit_text(f"✅ Sent to {ok} users. Failed: {fail}", reply_markup=owner_panel())
+    elif purpose == "addadmin":
+        if message.from_user.id != OWNER_ID:
+            return
+        if not (message.text or "").strip().lstrip("-").isdigit():
+            await message.reply_text("❌ Valid User ID bhejo (digits).")
+            return
+        uid = int(message.text.strip())
+        add_core_admin(uid)
+        await message.reply_text(f"✅ 👑 `{uid}` ab **core admin** hai!")
+    elif purpose == "deladmin":
+        if message.from_user.id != OWNER_ID:
+            return
+        if not (message.text or "").strip().lstrip("-").isdigit():
+            await message.reply_text("❌ Valid User ID bhejo (digits).")
+            return
+        uid = int(message.text.strip())
+        if uid == OWNER_ID:
+            await message.reply_text("❌ Owner ko remove nahi kar sakte. 👑")
+            return
+        del_core_admin(uid)
+        await message.reply_text(f"🗑️ 👑 `{uid}` admin list se hata diya.")
 
 # ==================== TOKEN BOT (LOGIN HELPER) ====================
 def clean_phone(text):
     return "".join(ch for ch in text if ch.isdigit() or ch == "+")
 
 async def safe_cleanup(client):
-    """Safely close a temp client that was only connect()ed (not start()ed).
-
-    Calling stop() on such a client raises "Client is already terminated"
-    because is_initialized is False. disconnect() is the correct call here.
-    """
     try:
         await client.disconnect()
     except Exception:
         pass
 
 async def start_music():
-    """Start the music userbot with the session string (idempotent)."""
     global vc, music_started
     if music_started:
         return
     if not SESSION_STRING:
         logger.error("start_music() called but no session string.")
         return
-    # [FIX] fail fast with a clear message if the versions are incompatible
     compat_ok, compat_msg = check_engine_compat()
     if not compat_ok:
         logger.error(compat_msg)
         print("\n  ❌ " + compat_msg.replace("\n", "\n     ") + "\n")
     try:
-        # inject session string into the in-memory music client
         music.session_string = SESSION_STRING
         music.storage = MemoryStorage(SESSION_NAME, SESSION_STRING)
-
         await music.start()
         logger.info("Music userbot started")
-
         vc = PyTgCalls(music)
-        # [FIX] support both handler APIs (old: decorator, new: add_handler)
         if hasattr(vc, "add_handler"):
             vc.add_handler(on_stream_end)
         else:
             vc.on_stream_end(on_stream_end)
         await vc.start()
         logger.info("PyTgCalls started")
-
         asyncio.create_task(auto_enforce_loop())
         music_started = True
         logger.info("%s is running…", BOT_NAME)
     except Exception as e:
-        # [FIX] log the FULL traceback (the short message was hiding the cause)
         import traceback as _tb
         logger.error("Music start error: %s", e)
         _tb.print_exc()
@@ -6366,8 +4226,7 @@ async def start_music():
             print("  ❌ FOUND THE KNOWN VERSION BUG:")
             print("     py-tgcalls >= 2.2.6 needs 'GroupcallForbidden'")
             print("     which pyrogram 2.0.106 does not have.")
-            print("  🔧 FIX (run on the server, then restart):")
-            print('     pip install "pyrogram==2.0.106" "py-tgcalls[pyrogram]==2.2.5"')
+            print("  🔧 FIX: pip install \"pyrogram==2.0.106\" \"py-tgcalls[pyrogram]==2.2.5\"")
             print("=" * 55 + "\n")
 
 @bot.on_message(filters.command("start"))
@@ -6388,7 +4247,6 @@ async def bot_status(client, message):
     if message.from_user.id != OWNER_ID:
         await message.reply_text("❌ Owner only.")
         return
-    # [FIX] include engine version + compatibility in the status
     try:
         from importlib.metadata import version as _dist_version
         pt_version = _dist_version("py-tgcalls")
@@ -6489,7 +4347,6 @@ async def bot_text(client, message):
             ss = await user_client.export_session_string()
             await safe_cleanup(user_client)
 
-            # save session + auto-start music bot
             with open(SESSION_FILE, "w") as f:
                 f.write(ss)
             SESSION_STRING = ss
@@ -6500,7 +4357,7 @@ async def bot_text(client, message):
             await start_music()
             await message.reply_text(
                 "🎉 **𝐃𝐄𝐕 𝐗 𝐂𝐎𝐑𝐄 active!**\n\n"
-                "The music bot is now ready. Start a voice chat in your group and use the buttons!"
+                "The music bot is now ready. Start a voice chat in your group and use `.play <song>`!"
             )
         except SessionPasswordNeeded:
             hint = ""
@@ -6515,7 +4372,6 @@ async def bot_text(client, message):
         except PhoneCodeInvalid:
             await message.reply_text("❌ Invalid code. Send the correct code.")
         except PhoneCodeExpired:
-            # Auto re-send a fresh code instead of forcing a full restart
             try:
                 sent = await user_client.send_code(st["phone"])
                 st["hash"] = sent.phone_code_hash
@@ -6565,10 +4421,9 @@ async def main():
     import shutil
 
     print("=" * 55)
-    print(" DEV X CORE  v4  —  USERBOT SYSTEM")
+    print(" DEV X CORE  v4  —  SIMPLE MUSIC USERBOT")
     print("=" * 55)
 
-    # 0. ffmpeg check (critical for playback)
     if shutil.which("ffmpeg") is None:
         print("  ❌ WARNING: ffmpeg NOT FOUND!")
         print("     Music will NOT play without ffmpeg.")
@@ -6577,10 +4432,6 @@ async def main():
     else:
         print(f"  ✅ ffmpeg: {shutil.which('ffmpeg')}")
 
-    # 0.4 — default logo -> GIF (one time) so it also attaches to menus
-    convert_default_logo()
-
-    # [FIX] 0.5 — version compatibility check (py-tgcalls vs pyrogram)
     compat_ok, compat_msg = check_engine_compat()
     if compat_ok:
         print("  ✅ py-tgcalls + pyrogram versions: compatible")
@@ -6588,7 +4439,6 @@ async def main():
         print("  ❌ " + compat_msg.replace("\n", "\n     "))
         print("=" * 55)
 
-    # 1. Start token bot (login helper) ALWAYS
     try:
         await bot.start()
         me = await bot.get_me()
@@ -6596,10 +4446,8 @@ async def main():
         print(f"  ✅ Owner ID: {OWNER_ID}")
     except Exception as e:
         print(f"  ❌ Login bot start FAILED: {e}")
-        print("     (invalid bot token / revoked / no internet)")
         await asyncio.sleep(2)
 
-    # 2. If session already exists -> start music immediately
     if SESSION_STRING:
         print("  🔑 Session string found — starting music bot…")
         await start_music()
@@ -6611,7 +4459,6 @@ async def main():
 
     print("=" * 55)
 
-    # 3. Keep running forever
     await asyncio.Event().wait()
 
 

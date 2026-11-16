@@ -6,8 +6,6 @@ devx_music.db
 *.log
 logs/
 temp/
-banner/*.mp4
-banner/*.gif
 backups/
 .env
 .coverage
